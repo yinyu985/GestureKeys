@@ -1,0 +1,306 @@
+import SwiftUI
+import AppKit
+import GestureCore
+
+struct DividerLine: View {
+    var body: some View { Rectangle().fill(Ink.border).frame(height: 1).accessibilityHidden(true) }
+}
+
+func sectionTitle(_ title: String) -> some View {
+    Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(Ink.secondary)
+}
+
+struct EditorField<Content: View>: View {
+    let label: String
+    @ViewBuilder var content: Content
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(label).font(.system(size: 12)).foregroundStyle(Ink.secondary)
+            Spacer(minLength: 10)
+            content
+        }.frame(minHeight: 28)
+    }
+}
+
+struct PopupRow: View {
+    let title: String
+    var icon: String? = nil
+    var selected = false
+    var showsCheckmark = true
+    var destructive = false
+    let action: () -> Void
+    @State private var hovered = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if let icon { Image(systemName: icon).frame(width: 14).accessibilityHidden(true) }
+                Text(title).lineLimit(1)
+                Spacer(minLength: 4)
+                if selected && showsCheckmark { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).accessibilityHidden(true) }
+            }.padding(.horizontal, 8).frame(height: 26).font(.system(size: 12))
+                .foregroundStyle(destructive ? Ink.danger : (selected || hovered) ? Ink.accentText : Ink.primary)
+                .background((selected || hovered) ? Ink.accent.opacity(selected ? 0.21 : 0.11) : .clear, in: RoundedRectangle(cornerRadius: 4))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).onHover { hovered = $0 }.accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+extension View {
+    func popupSurface(width: CGFloat) -> some View {
+        self.padding(5).frame(width: width).background(Ink.sidebar).foregroundStyle(Ink.primary).preferredColorScheme(.dark)
+    }
+}
+
+struct SelectionButton: View {
+    let title: String
+    let selected: Bool
+    var width: CGFloat? = nil
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: selected ? "largecircle.fill.circle" : "circle")
+                .lineLimit(1)
+        }.buttonStyle(QuietButton(prominent: selected, width: width))
+            .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+private struct ChoiceButton<Popup: View>: View {
+    let title: String
+    let width: CGFloat
+    @Binding var expanded: Bool
+    @ViewBuilder var popup: Popup
+    @Environment(\.isEnabled) private var enabled
+    @State private var hovered = false
+    var body: some View {
+        Button { expanded.toggle() } label: {
+            HStack(spacing: 8) {
+                Text(title).lineLimit(1)
+                Spacer(minLength: 3)
+                Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 8, weight: .semibold)).accessibilityHidden(true)
+            }.font(.system(size: 12, weight: .medium)).foregroundStyle(enabled ? Ink.accentText : Ink.muted)
+                .padding(.horizontal, 8).frame(width: width, height: 26)
+                .background(Ink.accent.opacity(!enabled ? 0.025 : expanded || hovered ? 0.14 : 0.075), in: RoundedRectangle(cornerRadius: 5))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Ink.accent.opacity(!enabled ? 0.13 : expanded || hovered ? 0.60 : 0.34)))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).onHover { hovered = $0 }.accessibilityHint("打开选项")
+            .popover(isPresented: $expanded, arrowEdge: .bottom) { popup }
+    }
+}
+
+struct ChoiceMenu<Value: Hashable>: View {
+    @Binding var selection: Value
+    let options: [Value]
+    var width: CGFloat = 112
+    let title: (Value) -> String
+    @State private var expanded = false
+    var body: some View {
+        ChoiceButton(title: title(selection), width: width, expanded: $expanded) {
+            VStack(spacing: 1) {
+                ForEach(options, id: \.self) { option in
+                    PopupRow(title: title(option), selected: selection == option) { selection = option; expanded = false }
+                }
+            }.popupSurface(width: max(112, width))
+        }
+    }
+}
+
+private struct ActionPages: View {
+    @Binding var selection: ActionKind
+    let width: CGFloat
+    @State private var expanded = false
+    @State private var page = 0
+    private let icons = ["slider.horizontal.3", "globe", "pencil", "macwindow"]
+    var body: some View {
+        ChoiceButton(title: selection.title, width: width, expanded: $expanded) {
+            HStack(alignment: .top, spacing: 0) {
+                VStack(spacing: 4) {
+                    ForEach(ActionKind.groups.indices, id: \.self) { index in
+                        PopupRow(title: ActionKind.groups[index].0, icon: icons[index], selected: page == index, showsCheckmark: false) { page = index }
+                    }
+                    Spacer(minLength: 0)
+                }.padding(7).frame(width: 160).background(Ink.base.opacity(0.58))
+                Rectangle().fill(Ink.border).frame(width: 1).accessibilityHidden(true)
+                ScrollView {
+                    VStack(spacing: 1) {
+                        ForEach(ActionKind.groups[page].1, id: \.self) { action in
+                            PopupRow(title: action.title, selected: selection == action, showsCheckmark: false) { selection = action; expanded = false }
+                        }
+                    }.padding(7)
+                }.id(page).scrollIndicators(.never).frame(width: 200)
+            }.frame(height: 312).background(Ink.sidebar).foregroundStyle(Ink.primary).preferredColorScheme(.dark)
+                .onAppear { page = ActionKind.groups.firstIndex(where: { $0.1.contains(selection) }) ?? 0 }
+        }
+    }
+}
+
+private enum MouseMode: CaseIterable {
+    case gesture, singleClick, doubleClick
+    var title: String {
+        switch self { case .gesture: return "手势"; case .singleClick: return "单击"; case .doubleClick: return "双击" }
+    }
+}
+
+enum ApplicationNames {
+    static func name(_ url: URL) -> String {
+        if let info = Bundle(url: url), let localized = info.localizedInfoDictionary?["CFBundleDisplayName"] as? String {
+            return localized
+        }
+        let fileName = FileManager.default.displayName(atPath: url.path)
+        let name = fileName.isEmpty ? url.lastPathComponent : fileName
+        return name.lowercased().hasSuffix(".app") ? String(name.dropLast(4)) : name
+    }
+    static func scope(for rule: Rule) -> String {
+        guard !rule.bundleID.isEmpty else { return "所有应用" }
+        if rule.bundleID == "com.apple.finder" { return "访达" }
+        if let name = rule.scopeName, !name.isEmpty { return name }
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: rule.bundleID) { return name(url) }
+        return "应用不可用"
+    }
+}
+
+struct RuleEditor: View {
+    @ObservedObject var model: AppModel
+    let isNew: Bool
+    @State var rule: Rule
+    @State var issue: String?
+    @Environment(\.dismiss) private var dismiss
+    private let controlWidth: CGFloat = 216
+    private let controlGap: CGFloat = 8
+    private var halfWidth: CGFloat { (controlWidth - controlGap) / 2 }
+    init(model: AppModel, draft: RuleDraft) {
+        self.model = model; isNew = draft.isNew; _rule = State(initialValue: draft.rule)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: rule.kind == .keyboard ? "keyboard" : "computermouse").foregroundStyle(Ink.accentText)
+                Text(isNew ? "添加规则" : "编辑规则").font(.system(size: 17, weight: .semibold))
+                Spacer()
+            }.padding(.horizontal, 16).frame(height: 40)
+            DividerLine()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Surface(verticalInset: 5) {
+                        EditorField(label: "规则名称") {
+                            HStack(spacing: controlGap) {
+                                TextField("输入名称", text: $rule.name).textFieldStyle(.plain).font(.system(size: 12))
+                                    .accessibilityLabel("规则名称").padding(.horizontal, 8).frame(width: halfWidth, height: 27)
+                                    .background(Ink.base, in: RoundedRectangle(cornerRadius: 5))
+                                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Ink.border))
+                                SelectionButton(title: "触发时显示", selected: rule.showsName == true, width: halfWidth) {
+                                    rule.showsName = rule.showsName == true ? nil : true
+                                }.help("触发规则时显示规则名称")
+                            }
+                        }
+                        DividerLine().padding(.vertical, 3)
+                        EditorField(label: "触发方式") {
+                            if rule.kind == .keyboard {
+                                ShortcutRecorder(shortcut: $rule.triggerKey).frame(width: controlWidth, height: 27)
+                            } else {
+                                HStack(spacing: controlGap) {
+                                    ChoiceMenu(selection: $rule.mouseButton, options: Array(1...7), width: halfWidth, title: Rule.buttonName)
+                                    ChoiceMenu(selection: mouseMode, options: MouseMode.allCases, width: halfWidth) { rule.mouseButton == 0 ? "选择方式" : $0.title }
+                                        .disabled(rule.mouseButton == 0)
+                                }
+                            }
+                        }
+                    }
+                    if showsTrack { track }
+                    Surface(verticalInset: 5) {
+                        EditorField(label: "执行动作") { ActionPages(selection: $rule.action, width: controlWidth) }
+                        if rule.action == .shortcut {
+                            DividerLine().padding(.vertical, 3)
+                            EditorField(label: "发送快捷键") { ShortcutRecorder(shortcut: $rule.outputKey).frame(width: controlWidth, height: 27) }
+                        } else if rule.action == .openApplication {
+                            DividerLine().padding(.vertical, 3)
+                            EditorField(label: "打开") {
+                                Button(rule.appPath.isEmpty ? "选择要打开的应用" : ApplicationNames.name(URL(fileURLWithPath: rule.appPath))) {
+                                    model.chooseApplication { rule.appPath = $0.path }
+                                }.lineLimit(1).buttonStyle(QuietButton(width: controlWidth))
+                            }
+                        }
+                        DividerLine().padding(.vertical, 3)
+                        EditorField(label: "应用范围") {
+                            SelectionButton(title: "所有应用", selected: rule.bundleID.isEmpty, width: halfWidth) { rule.bundleID = ""; rule.scopeName = nil }
+                            SelectionButton(title: rule.bundleID.isEmpty ? "选择应用" : ApplicationNames.scope(for: rule), selected: !rule.bundleID.isEmpty, width: halfWidth) {
+                                model.chooseApplication { url in
+                                    guard let id = Bundle(url: url)?.bundleIdentifier else { issue = "无法识别这个应用，请选择另一个。"; return }
+                                    rule.bundleID = id; rule.scopeName = ApplicationNames.name(url)
+                                }
+                            }.help("选择生效的应用")
+                        }
+                    }
+                }.padding(.horizontal, 16).padding(.vertical, 9)
+            }.scrollIndicators(.never)
+            DividerLine()
+            VStack(alignment: .leading, spacing: 8) {
+                if let hint = issue ?? hint {
+                    Label(hint, systemImage: issue == nil ? "info.circle" : "exclamationmark.circle")
+                        .font(.system(size: 11)).foregroundStyle(issue == nil ? Ink.secondary : Ink.danger)
+                        .lineLimit(2)
+                }
+                HStack(spacing: 8) {
+                    EditorInputReadout(style: model.configuration.trailStyle).frame(width: 216, height: 20)
+                    Spacer()
+                    Button("取消") { diagnostics.record("rule.editor_cancelled", diagnosticRule(rule)); dismiss() }.buttonStyle(QuietButton()).keyboardShortcut(.cancelAction)
+                    Button("保存", action: save).buttonStyle(QuietButton(prominent: true)).keyboardShortcut(.defaultAction)
+                }
+            }.padding(.horizontal, 16).padding(.vertical, 9)
+        }.frame(width: 478, height: editorHeight)
+            .background(Ink.base).foregroundStyle(Ink.primary).tint(Ink.accent).preferredColorScheme(.dark)
+            .onChange(of: rule) { _ in issue = nil }
+    }
+    private var editorHeight: CGFloat {
+        let extended = rule.action == .shortcut || rule.action == .openApplication
+        return 268 + (showsTrack ? 218 : 0) + (extended ? 35 : 0) + (issue != nil || hint != nil ? 34 : 0)
+    }
+    private var showsTrack: Bool { rule.kind == .gesture && rule.mouseButton > 0 }
+    private var mouseMode: Binding<MouseMode> {
+        Binding(get: {
+            rule.kind == .gesture ? .gesture : rule.clickCount == 2 ? .doubleClick : .singleClick
+        }, set: { mode in
+            var updated = rule
+            updated.kind = mode == .gesture ? .gesture : .click
+            updated.storedClickCount = mode == .doubleClick ? 2 : nil
+            rule = updated
+        })
+    }
+    private var hint: String? {
+        if rule.kind == .click && rule.mouseButton == 1 { return rule.clickCount == 2 ? "若也绑定了单击，单击会等到双击判定结束再触发。" : "绑定右键单击会替代普通右键菜单。" }
+        if [.nextDesktop, .previousDesktop, .appWindows, .showDesktop].contains(rule.action) { return "使用 macOS 系统快捷键；请确认系统设置中的快捷键已启用。" }
+        if rule.action == .block { return "拦下输入但不执行动作。可用于覆盖同一触发方式的全局规则。" }
+        return nil
+    }
+    private var trailPreset: Binding<ShapePreset?> {
+        Binding(get: { ShapePreset(rawValue: rule.shapeName) }, set: { selection in
+            guard let selection else { return }
+            rule.points = Shape.preset(selection); rule.shapeName = selection.rawValue
+            diagnostics.record("rule.gesture_preset_selected", ["rule": rule.id.uuidString, "preset": selection.rawValue])
+        })
+    }
+    private var track: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                sectionTitle("轨迹")
+                Spacer()
+                ChoiceMenu(selection: trailPreset, options: ShapePreset.editorOptions.map(Optional.some), width: 144) {
+                    $0?.title ?? (rule.points.isEmpty ? "预设轨迹" : "手绘轨迹")
+                }
+                Button("清空") {
+                    rule.points = []; rule.shapeName = ""
+                    diagnostics.record("rule.gesture_cleared", ["rule": rule.id.uuidString])
+                }.buttonStyle(QuietButton()).disabled(rule.points.isEmpty)
+            }
+            StrokeCanvas(points: rule.points, preset: ShapePreset(rawValue: rule.shapeName), style: model.configuration.trailStyle) { points in
+                rule.points = points; rule.shapeName = "自定义"
+                diagnostics.record("rule.gesture_drawn", ["rule": rule.id.uuidString, "point_count": String(points.count)])
+            }.frame(height: 178).clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Ink.border))
+        }
+    }
+    private func save() {
+        var normalized = rule; normalized.name = rule.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        issue = model.commit(normalized, isNew: isNew)
+    }
+}
