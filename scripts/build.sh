@@ -40,10 +40,13 @@ codesign --force --sign - --identifier local.yy.GestureKeys "$APP"
 codesign --verify --strict "$APP"
 echo "Built: $APP"
 # Keep a single copy so the Accessibility entry always points at the same bundle.
-INSTALL_DIR="${GESTUREKEYS_INSTALL_DIR:-/Applications}"
-if [[ -w "$INSTALL_DIR" ]]; then
+# An empty GESTUREKEYS_INSTALL_DIR skips installation.
+INSTALL_DIR="${GESTUREKEYS_INSTALL_DIR-/Applications}"
+if [[ -n "$INSTALL_DIR" && -w "$INSTALL_DIR" ]]; then
   swift -e 'import AppKit; for app in NSRunningApplication.runningApplications(withBundleIdentifier: "local.yy.GestureKeys") { _ = app.terminate() }' || true
   sleep 1
+  # Replace, never merge: an old file left behind invalidates the code signature.
+  rm -rf "$INSTALL_DIR/GestureKeys.app"
   ditto "$APP" "$INSTALL_DIR/GestureKeys.app"
   codesign --verify --strict "$INSTALL_DIR/GestureKeys.app"
   touch "$INSTALL_DIR/GestureKeys.app"

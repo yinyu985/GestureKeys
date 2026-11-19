@@ -35,7 +35,9 @@
 
 4. 打开 GestureKeys。
 
-> 为什么需要这一步：本项目没有 Apple 开发者证书，只能用 ad-hoc 签名。macOS 的 Gatekeeper 对没有公证的下载文件一律拦截。
+不想用终端也可以：双击应用被拦后，打开 **系统设置 → 隐私与安全性**，在页面底部点「仍要打开」，再确认一次。
+
+> 为什么需要这一步：本项目没有 Apple 开发者证书，只能用 ad-hoc 签名，也无法公证。Gatekeeper 对没有公证的下载文件一律拦截。移除隔离标记后应用能正常运行，但 `spctl --assess` 仍会显示 rejected，这是预期行为，不是新故障。
 
 ### 方式二：从源码构建
 
@@ -44,10 +46,11 @@
 ```bash
 git clone https://github.com/yinyu985/GestureKeys.git
 cd GestureKeys
-GESTUREKEYS_INSTALL_DIR= ./scripts/build.sh
+./scripts/build.sh                          # 构建并安装到 /Applications
+GESTUREKEYS_INSTALL_DIR= ./scripts/build.sh # 只构建，不安装
 ```
 
-构建产物在 `.build/bundle/GestureKeys.app`。脚本默认会把它装到 `/Applications`；上面用空变量跳过了安装，需要的话自己 `ditto` 过去。
+构建产物在 `.build/bundle/GestureKeys.app`。由自己构建、没有从网络下载的文件不带隔离标记，不需要 `xattr`。
 
 脚本依次执行核心检查、release 构建、生成图标、ad-hoc 签名。任意一步失败会直接退出。
 
