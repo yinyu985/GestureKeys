@@ -17,42 +17,31 @@
 ## 系统要求
 
 - macOS 13 或更新版本
-- 预编译版本目前只提供 **Apple Silicon（arm64）**；Intel Mac 请从源码构建
+- 预编译版本是 **Apple Silicon（arm64）**，直接下载就能用，不需要构建
 
 ## 安装
 
-### 方式一：下载预编译版本
-
-1. 打开 [Releases](../../releases) 页面，下载最新的 `GestureKeys-<版本>-arm64.zip`。
+1. 打开 [Releases](../../releases)，下载 `GestureKeys-0.6.2-arm64.zip`。
 2. 解压，把 `GestureKeys.app` 拖进 `/Applications`。
-3. 打开终端，移除隔离标记：
+3. 移除隔离标记（**必须做一次，否则打不开**）：
 
    ```bash
    xattr -dr com.apple.quarantine /Applications/GestureKeys.app
    ```
 
-   不做这一步，macOS 会提示「无法验证开发者」，直接从 Finder 双击打不开。
-
 4. 打开 GestureKeys。
 
-不想用终端也可以：双击应用被拦后，打开 **系统设置 → 隐私与安全性**，在页面底部点「仍要打开」，再确认一次。
-
-> 为什么需要这一步：本项目没有 Apple 开发者证书，只能用 ad-hoc 签名，也无法公证。Gatekeeper 对没有公证的下载文件一律拦截。移除隔离标记后应用能正常运行，但 `spctl --assess` 仍会显示 rejected，这是预期行为，不是新故障。
-
-### 方式二：从源码构建
-
-需要 Xcode Command Line Tools（`xcode-select --install`）和 Swift 6。
+也可以用终端一条命令完成下载、安装和解除隔离：
 
 ```bash
-git clone https://github.com/yinyu985/GestureKeys.git
-cd GestureKeys
-./scripts/build.sh                          # 构建并安装到 /Applications
-GESTUREKEYS_INSTALL_DIR= ./scripts/build.sh # 只构建，不安装
+cd ~/Downloads && unzip -oq GestureKeys-0.6.2-arm64.zip -d /Applications \
+  && xattr -dr com.apple.quarantine /Applications/GestureKeys.app \
+  && open /Applications/GestureKeys.app
 ```
 
-构建产物在 `.build/bundle/GestureKeys.app`。由自己构建、没有从网络下载的文件不带隔离标记，不需要 `xattr`。
+不想用终端：双击被拦后，打开 **系统设置 → 隐私与安全性**，在页面底部点「仍要打开」，再确认一次。
 
-脚本依次执行核心检查、release 构建、生成图标、ad-hoc 签名。任意一步失败会直接退出。
+> 为什么会被拦：本项目没有 Apple 开发者证书，只能用 ad-hoc 签名，无法公证。移除隔离标记后应用正常运行，但 `spctl --assess` 仍会显示 rejected，这是预期行为。
 
 ## 首次启动
 
@@ -140,6 +129,17 @@ scripts/make_icon.swift  生成 AppIcon
 ```bash
 swift run GestureCoreChecks
 ```
+
+### 自己构建
+
+需要 Xcode Command Line Tools（`xcode-select --install`）和 Swift 6。
+
+```bash
+./scripts/build.sh                           # 构建并装到 /Applications
+GESTUREKEYS_INSTALL_DIR= ./scripts/build.sh  # 只构建，不安装
+```
+
+脚本依次执行核心检查、release 构建、生成图标、ad-hoc 签名。产物在 `.build/bundle/GestureKeys.app`。自己构建的文件不带隔离标记，不需要 `xattr`。
 
 ## 从 BetterAndBetter 迁移
 
