@@ -23,23 +23,21 @@ img { display: block; width: 100%; height: auto; }
 .header nav { display: flex; align-items: center; gap: clamp(10px, 3vw, 26px); }
 .header a, .footer a { text-decoration: none; }
 .header nav a, .footer a { color: var(--muted); font-size: .875rem; padding-block: 12px; }
-.header nav a:hover, .footer a:hover, .secondary:hover { color: var(--blue); }
+.header nav a:hover, .footer a:hover { color: var(--blue); }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -.025em; }
 .brand img { width: 34px; }
 .hero { display: grid; grid-template-columns: 0.73fr 1.25fr; align-items: center; gap: clamp(24px, 5vw, 72px); padding-block: clamp(48px, 8vw, 108px); }
 .edition, .platform, kbd, code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .edition { color: var(--blue); font-size: .875rem; letter-spacing: .05em; font-weight: 650; }
-.edition span, .platform span { padding-inline: .35em; }
+.platform span { padding-inline: .35em; }
 h1 { font-size: clamp(3.1rem, 5.45vw, 5rem); line-height: 1.12; letter-spacing: -.065em; margin-block: 14px 24px; }
 h1 span, h1 em { display: block; white-space: nowrap; }
 h1 em { color: var(--blue); font-style: normal; }
 .lead { color: var(--muted); max-width: 23em; }
 kbd { padding: .1em .35em; white-space: nowrap; border: 1px solid var(--line); border-radius: .3em; font-size: .86em; color: var(--text); }
 .links { display: flex; flex-wrap: wrap; gap: 9px 18px; margin-top: 26px; align-items: center; }
-.download, .secondary { min-height: 44px; display: inline-flex; align-items: center; gap: .65em; font-weight: 700; text-decoration: none; font-size: .9rem; }
-.download { background: var(--blue); color: #121c32; border-radius: 7px; padding: 0 14px; }
+.download { min-height: 44px; display: inline-flex; align-items: center; gap: .65em; font-weight: 700; text-decoration: none; font-size: .9rem; background: var(--blue); color: #121c32; border-radius: 7px; padding: 0 14px; }
 .download:hover { background: #c2d6ff; }
-.secondary { color: var(--muted); }
 .platform { font-size: .8rem; color: var(--muted); margin-top: 12px; }
 .app-preview { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; box-shadow: 0 14px 40px #0b0f1666; }
 .trace { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
