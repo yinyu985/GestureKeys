@@ -356,6 +356,9 @@ final class GestureCoreTests {
             XCTAssertTrue(groups.contains(action))
             XCTAssertNotNil(action.standardShortcut)
         }
+        // Control-Tab is the tab shortcut browsers document, so the fixed actions must send it.
+        XCTAssertEqual(ActionKind.nextTab.standardShortcut, Shortcut(48, 0x40000))
+        XCTAssertEqual(ActionKind.previousTab.standardShortcut, Shortcut(48, 0x60000))
         for action in groups where ![.shortcut, .openApplication, .openLink, .openFileOrFolder].contains(action) {
             XCTAssertTrue(action.standardShortcut != nil || action.systemAppPath != nil)
         }

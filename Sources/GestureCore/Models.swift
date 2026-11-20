@@ -111,8 +111,9 @@ public enum ActionKind: String, Codable, CaseIterable, Sendable {
         case .newTab: return Shortcut(17, 0x100000)
         case .closeTab: return Shortcut(13, 0x100000)
         case .reopenTab: return Shortcut(17, 0x120000)
-        case .nextTab: return Shortcut(30, 0x120000)
-        case .previousTab: return Shortcut(33, 0x120000)
+        // Control-Tab is the tab shortcut Chrome, Safari and Firefox document; Shift-Command-Bracket is not.
+        case .nextTab: return Shortcut(48, 0x40000)
+        case .previousTab: return Shortcut(48, 0x60000)
         case .find: return Shortcut(3, 0x100000)
         case .cut: return Shortcut(7, 0x100000)
         case .copy: return Shortcut(8, 0x100000)
