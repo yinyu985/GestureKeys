@@ -2,7 +2,7 @@
 
 GestureKeys 是一个原生 macOS 工具。用键盘快捷键、鼠标点击和手势执行常用操作。规则与诊断日志只保存在本机。
 
-[下载 macOS 版（Apple Silicon）](https://github.com/yinyu985/GestureKeys/releases/latest) · [安装说明](#安装)
+[下载 macOS 版（Apple Silicon）](https://github.com/yinyu985/GestureKeys/releases/latest) · [安装说明](#安装) · [官网](https://gesturekeys.pages.dev)
 
 <a href="site/assets/rules.webp"><img src="site/assets/rules.webp" alt="鼠标规则列表，包括轨迹缩略图和触发提示开关" width="510"></a>
 <a href="site/assets/editor.webp"><img src="site/assets/editor.webp" alt="右键手势规则的编辑器" width="210"></a>
@@ -116,7 +116,7 @@ scripts/make_icon.swift  生成 AppIcon
 site/                   官网静态页面和截图
 ```
 
-Cloudflare Pages 可连接本仓库的 `main`：根目录 `site`，不设构建命令，输出目录 `.`。可以用 `site/*` 作为构建监视路径，只在网站文件变更时部署。
+Cloudflare Pages 已连接本仓库的 `main`，站点地址为 <https://gesturekeys.pages.dev>。当前配置：生产分支 `main`，根目录留空（仓库根），构建命令留空，构建输出目录 `site`，构建监视路径 `site/*`。只在 `site/` 变化时重新部署。
 
 运行核心检查：
 
