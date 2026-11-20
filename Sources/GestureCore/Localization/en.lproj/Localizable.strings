@@ -6,15 +6,16 @@
 "「%1$@」和「%2$@」使用相同触发方式。" = "“%1$@” and “%2$@” use the same trigger.";
 "「%1$@」执行失败：%2$@" = "“%1$@” failed: %2$@";
 "上一个标签页" = "Previous Tab";
-"上一个桌面" = "Previous Desktop";
+"上一个空间" = "Previous Space";
 "下一个标签页" = "Next Tab";
-"下一个桌面" = "Next Desktop";
+"下一个空间" = "Next Space";
 "不是支持的 BetterAndBetter 预设。" = "This is not a supported BetterAndBetter preset.";
 "与「%1$@」使用相同的触发方式。" = "This uses the same trigger as “%1$@”.";
 "中键" = "Middle";
 "从右下到左上" = "Diagonal Up Left";
 "从左下到右上" = "Diagonal Up Right";
 "使用 macOS 系统快捷键；请确认系统设置中的快捷键已启用。" = "Uses a macOS shortcut. Make sure it is enabled in System Settings.";
+"默认使用 %1$@。如果你在「系统设置 → 键盘 → 键盘快捷键 → 调度中心」改过键位，请选「发送快捷键」，录入你实际设置的组合键。" = "The default is %1$@. If you changed it in System Settings → Keyboard → Keyboard Shortcuts → Mission Control, choose Send Shortcut and record your shortcut.";
 "保存" = "Save";
 "保存失败：%1$@" = "Could not save: %1$@";
 "全选" = "Select All";
@@ -73,6 +74,8 @@
 "手绘轨迹" = "Freehand Gesture";
 "打开" = "Open";
 "打开应用" = "Open App";
+"打开文件或文件夹" = "Open File or Folder";
+"打开链接" = "Open Link";
 "打开登录项" = "Open Login Items";
 "打开访达" = "Open Finder";
 "打开选项" = "Open Options";
@@ -80,7 +83,8 @@
 "执行动作" = "Action";
 "找不到应用「%1$@」" = "App not found: “%1$@”";
 "找不到这条规则。" = "This rule no longer exists.";
-"拦下输入但不执行动作。可用于覆盖同一触发方式的全局规则。" = "Consume the input without an action. Use it to override a global rule.";
+"此规则会吞掉输入。例如仅对某个 App 使用时，同一个全局规则不会执行，原来的按键也不会传给该 App。" = "This rule consumes the input. In the selected app, the global rule does not run and the app does not receive the original input.";
+"恢复刚撤销的操作。" = "Apply the last change you undid.";
 "授权" = "Grant Access";
 "排障" = "Troubleshooting";
 "撤销" = "Undo";
@@ -113,6 +117,7 @@
 "查看" = "View";
 "正在录入快捷键，按 Esc 取消" = "Recording shortcut. Press Esc to cancel.";
 "此规则来自旧版不支持的导入格式。" = "This rule uses an unsupported legacy import format.";
+"此系统快捷键也是触发键，请改用不同的组合键。" = "This system shortcut is also a trigger. Choose a different key combination.";
 "浅色" = "Light";
 "深色" = "Dark";
 "添加规则" = "Add Rule";
@@ -161,6 +166,9 @@
 "请选择右键、中键或侧键。" = "Choose the right, middle, or a side button.";
 "请选择执行动作。" = "Choose an action.";
 "请选择要打开的应用。" = "Choose an app to open.";
+"请选择要打开的文件或文件夹。" = "Choose a file or folder to open.";
+"请输入完整的 http:// 或 https:// 链接。" = "Enter a full link starting with http:// or https://.";
+"语言" = "Language";
 "调度中心" = "Mission Control";
 "跟随系统" = "System";
 "轨迹" = "Gesture Path";
@@ -182,6 +190,8 @@
 "选择方式" = "Choose Mode";
 "选择生效的应用" = "Choose where the rule applies";
 "选择要打开的应用" = "Choose an App to Open";
+"选择文件或文件夹" = "Choose File or Folder";
+"网址" = "Web Address";
 "通用" = "General";
 "都不显示" = "Hidden";
 "配置" = "Configuration";

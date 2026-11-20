@@ -62,8 +62,10 @@ final class AppModel: ObservableObject {
     private enum MonitorState { case idle, starting, running, stopping }
     private var monitorState = MonitorState.idle
     var running: Bool { monitorState == .running }
-    @Published private(set) var monitorError: String?
-    @Published private(set) var actionError: String?
+    @Published private var monitorIssue: MonitorIssue?
+    @Published private var actionIssue: (ruleName: String, failure: ActionFailure)?
+    var monitorError: String? { monitorIssue.map { L10n.text($0.rawValue) } }
+    var actionError: String? { actionIssue.map { L10n.text("「%1$@」执行失败：%2$@", $0.ruleName, $0.failure.message) } }
     private let isSmokeTest = ProcessInfo.processInfo.environment["GESTUREKEYS_SMOKE_TEST"] != nil
     var message: String? {
         didSet { if let message { prompt = AppPrompt(title: "GestureKeys", detail: message) } }
@@ -71,6 +73,7 @@ final class AppModel: ObservableObject {
     @Published var accessibilityGranted = AXIsProcessTrusted()
     @Published var inputGranted = CGPreflightListenEventAccess()
     @Published var page = SettingsPage.keyboard
+    @Published private(set) var appLanguage = AppLanguage.load()
     var recordingShortcut = false { didSet { if recordingShortcut != oldValue { syncEngine() } } }
     private var filePanelOpen = false { didSet { if filePanelOpen != oldValue { syncEngine() } } }
     private var sheetVisible = false
@@ -135,7 +138,7 @@ final class AppModel: ObservableObject {
             } else {
                 self.monitorState = .idle
                 self.trail.update(nil); self.nameHUD.hide()
-                if let error { self.monitorError = error; self.syncEngine() }
+                if let error { self.monitorIssue = error; self.syncEngine() }
                 else { self.syncAutomaticMonitoring() }
             }
         }
@@ -146,11 +149,11 @@ final class AppModel: ObservableObject {
         }
         engine.onAction = { [weak self] rule in
             guard let self else { return }
-            self.actionError = nil
-            if rule.showsName == true { self.nameHUD.show(rule.name) }
+            self.actionIssue = nil
+            if rule.showsName == true { self.nameHUD.show(rule.displayName) }
         }
-        engine.onActionError = { [weak self] rule, detail in
-            self?.actionError = L10n.text("「%1$@」执行失败：%2$@", "\(rule.name)", "\(detail)")
+        engine.onActionError = { [weak self] rule, failure in
+            self?.actionIssue = (rule.name, failure)
         }
         engine.onTrail = { [weak self] points in
             guard let self else { return }
@@ -174,6 +177,11 @@ final class AppModel: ObservableObject {
         do { try storage.migrateLegacyBackup() }
         catch { diagnostics.record("config.backup_migration_failed", diagnosticError(error)); message = L10n.text("无法重命名旧备份，原文件未改动。\n%1$@", "\(error.localizedDescription)") }
         if needsMigration { saveNow() }
+    }
+    func setLanguage(_ language: AppLanguage) {
+        guard appLanguage != language else { return }
+        language.save()
+        appLanguage = language
     }
     var visibleRules: [Rule] {
         RuleResolver.libraryOrder(configuration.rules, keyboard: page == .keyboard)
@@ -258,14 +266,13 @@ final class AppModel: ObservableObject {
         let hasRules = configuration.rules.contains { $0.enabled && $0.validationError == nil }
         let permissionsOK = accessibilityGranted && inputGranted && CGPreflightPostEventAccess()
         let hasConflicts = hasRules && !conflicts.isEmpty
-        let problem = hasConflicts ? L10n.text("存在重复触发规则，请修改或停用其中一条。") :
-            hasRules && !permissionsOK ? L10n.text("缺少输入权限，请在「通用」中授权。") : nil
+        let issue: MonitorIssue? = hasConflicts ? .conflictingRules : hasRules && !permissionsOK ? .missingPermissions : nil
         let decision = !writable ? "invalid_configuration" : !hasRules ? "no_enabled_rules" : hasConflicts ? "rule_conflicts" : !permissionsOK ? "missing_permissions" : "allow"
         if loggedMonitorDecision != decision {
             loggedMonitorDecision = decision; diagnostics.record("monitor.policy", ["decision": decision])
         }
         if decision != "allow" {
-            if monitorError != problem { monitorError = problem }
+            if monitorIssue != issue { monitorIssue = issue }
             if monitorState == .running || monitorState == .starting {
                 monitorState = .stopping; engine.stop()
             }
@@ -273,8 +280,8 @@ final class AppModel: ObservableObject {
         } else if monitorState == .idle {
             monitorState = .starting
             syncEngine(); engine.start(); return
-        } else if monitorState == .running && monitorError != nil {
-            monitorError = nil
+        } else if monitorState == .running && monitorIssue != nil {
+            monitorIssue = nil
         }
         syncEngine()
     }
@@ -372,7 +379,15 @@ final class AppModel: ObservableObject {
     }
     func chooseApplication(_ completion: @escaping (URL) -> Void) {
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.application]
-        panel.directoryURL = URL(fileURLWithPath: "/Applications"); panel.canChooseDirectories = false
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        chooseItem(panel, completion)
+    }
+    func chooseFileOrFolder(_ completion: @escaping (URL) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        chooseItem(panel, completion)
+    }
+    private func chooseItem(_ panel: NSOpenPanel, _ completion: @escaping (URL) -> Void) {
         panel.allowsMultipleSelection = false; panel.prompt = L10n.text("选择")
         filePanelOpen = true
         panel.begin { [weak self] response in

@@ -2,6 +2,26 @@ import AppKit
 import ApplicationServices
 import GestureCore
 
+enum MonitorIssue: String, Sendable {
+    case conflictingRules = "存在重复触发规则，请修改或停用其中一条。"
+    case missingPermissions = "缺少输入权限，请在「通用」中授权。"
+    case cannotListen = "无法监听输入。请授予辅助功能和输入监控权限，然后重试。"
+}
+
+enum ActionFailure: Sendable {
+    case missingApplication(String)
+    case cannotOpen(String, String)
+    case wouldRetriggerHotkey
+
+    var message: String {
+        switch self {
+        case .missingApplication(let name): return L10n.text("找不到应用「%1$@」", name)
+        case .cannotOpen(let name, let detail): return L10n.text("无法打开「%1$@」：%2$@", name, detail)
+        case .wouldRetriggerHotkey: return L10n.text("此系统快捷键也是触发键，请改用不同的组合键。")
+        }
+    }
+}
+
 final class EventEngine: @unchecked Sendable {
     static let marker: Int64 = 0x474b_4559_535f_3031
     private let lock = NSLock()
@@ -39,9 +59,9 @@ final class EventEngine: @unchecked Sendable {
     private var verificationReplay: (([CGEvent]) -> Void)?
     private var verificationActions: [UUID]?
 
-    var onStatus: ((Bool, String?) -> Void)?
+    var onStatus: ((Bool, MonitorIssue?) -> Void)?
     var onAction: ((Rule) -> Void)?
-    var onActionError: ((Rule, String) -> Void)?
+    var onActionError: ((Rule, ActionFailure) -> Void)?
     var onTrail: (([StrokePoint]?) -> Void)?
 
     func update(_ config: Configuration, frontmost: String, suspended: Bool, pid: pid_t = 0) {
@@ -82,8 +102,8 @@ final class EventEngine: @unchecked Sendable {
             CFRunLoopWakeUp(currentLoop)
         }
     }
-    private func status(_ running: Bool, _ message: String? = nil) {
-        DispatchQueue.main.async { [weak self] in self?.onStatus?(running, message) }
+    private func status(_ running: Bool, _ issue: MonitorIssue? = nil) {
+        DispatchQueue.main.async { [weak self] in self?.onStatus?(running, issue) }
     }
     private func run() {
         let mask = [CGEventType.rightMouseDown, .rightMouseUp, .rightMouseDragged,
@@ -99,7 +119,7 @@ final class EventEngine: @unchecked Sendable {
               let source = CFMachPortCreateRunLoopSource(nil, port, 0) else {
             lock.lock(); thread = nil; lock.unlock()
             diagnostics.record("tap.start_failed")
-            status(false, L10n.text("无法监听输入。请授予辅助功能和输入监控权限，然后重试。"))
+            status(false, .cannotListen)
             return
         }
         let runLoop = CFRunLoopGetCurrent()!
@@ -175,6 +195,12 @@ final class EventEngine: @unchecked Sendable {
             }
         } else { diagnostics.record("mouse.cancelled", ["trace": pending.trace, "reason": "context_changed", "replayed": "false"]) }
     }
+    static func shortcutFlags(_ shortcut: Shortcut, system: Bool) -> CGEventFlags {
+        var flags = CGEventFlags(rawValue: shortcut.modifiers)
+        // System hotkeys see an arrow as a navigation key, unlike app-local key handlers.
+        if system && (123...126).contains(shortcut.keyCode) { flags.formUnion([.maskSecondaryFn, .maskNumericPad]) }
+        return flags
+    }
     private func execute(_ rule: Rule, trace: String, app: String) {
         let facts = diagnosticRule(rule).merging(["trace": trace, "app": app]) { _, new in new }
         diagnostics.record("input.matched", facts)
@@ -190,47 +216,65 @@ final class EventEngine: @unchecked Sendable {
             guard stillCurrent() else { diagnostics.record("action.cancelled", facts.merging(["reason": "context_changed"]) { _, new in new }); return }
             DispatchQueue.main.async { [weak self] in self?.onAction?(rule) }
             if rule.action == .block { diagnostics.record("action.blocked_by_rule", facts); return }
-            if let target = rule.action == .openApplication ? rule.appPath : rule.action.systemAppPath {
-                let url = URL(fileURLWithPath: target)
-                let name = url.deletingPathExtension().lastPathComponent
+            let appPath = rule.action == .openApplication ? rule.appPath : rule.action.systemAppPath
+            let destination = appPath.map { URL(fileURLWithPath: $0) } ?? rule.locationToOpen
+            if let url = destination {
                 guard let run = self.currentRunID() else { return }
+                let name = appPath != nil ? url.deletingPathExtension().lastPathComponent : rule.actionDescription
                 DispatchQueue.main.async {
                     guard stillCurrent() else { diagnostics.record("action.cancelled", facts.merging(["reason": "context_changed"]) { _, new in new }); return }
-                    let failure: (String) -> Void = { detail in
+                    let failure: (ActionFailure) -> Void = { detail in
                         guard self.currentRunID() == run else { return }
                         self.onActionError?(rule, detail)
                     }
-                    guard FileManager.default.fileExists(atPath: target) else {
+                    if appPath != nil && !FileManager.default.fileExists(atPath: url.path) {
                         diagnostics.record("action.open_failed", facts.merging(["reason": "application_not_found"]) { _, new in new })
-                        failure(L10n.text("找不到应用「%1$@」", "\(name)"))
-                        return
+                        failure(.missingApplication(name)); return
                     }
+                    let workspace = NSWorkspace.shared
+                    let options = NSWorkspace.OpenConfiguration()
                     diagnostics.record("action.open_requested", facts)
-                    NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { application, error in
+                    let completed: (NSRunningApplication?, Error?) -> Void = { application, error in
                         if let error {
                             diagnostics.record("action.open_failed", facts.merging(diagnosticError(error)) { _, new in new })
-                            DispatchQueue.main.async { failure(L10n.text("无法打开「%1$@」：%2$@", "\(name)", "\(error.localizedDescription)")) }
+                            DispatchQueue.main.async { failure(.cannotOpen(name, error.localizedDescription)) }
                         } else if let application {
                             diagnostics.record("action.open_confirmed", facts.merging(["target_bundle": application.bundleIdentifier ?? ""]) { _, new in new })
-                        } else { diagnostics.record("action.open_unconfirmed", facts) }
+                        } else {
+                            diagnostics.record("action.open_unconfirmed", facts)
+                        }
                     }
+                    if appPath != nil { workspace.openApplication(at: url, configuration: options, completionHandler: completed) }
+                    else { workspace.open(url, configuration: options, completionHandler: completed) }
                 }
             } else {
-                let shortcut = rule.action == .shortcut ? rule.outputKey : rule.action.standardShortcut
-                guard let shortcut else { diagnostics.record("action.shortcut_missing", facts); return }
+                guard let shortcut = rule.shortcutToSend else { diagnostics.record("action.shortcut_missing", facts); return }
+                // A user-defined shortcut travels the normal keyboard route, including system hotkeys.
+                let targeted = token.1 > 0 && !rule.action.isSystemShortcut
+                if !targeted {
+                    let config = self.snapshot().0
+                    if RuleResolver.scoped(config.rules, bundleID: app).contains(where: { $0.kind == .keyboard && $0.triggerKey == shortcut }) {
+                        diagnostics.record("action.shortcut_failed", facts.merging(["reason": "would_retrigger_hotkey"]) { _, new in new })
+                        DispatchQueue.main.async { [weak self] in
+                            self?.onActionError?(rule, .wouldRetriggerHotkey)
+                        }
+                        return
+                    }
+                }
                 let source = CGEventSource(stateID: .privateState)
                 guard let down = CGEvent(keyboardEventSource: source, virtualKey: shortcut.keyCode, keyDown: true),
                       let up = CGEvent(keyboardEventSource: source, virtualKey: shortcut.keyCode, keyDown: false) else {
                     diagnostics.record("action.shortcut_failed", facts.merging(["reason": "event_creation_failed"]) { _, new in new }); return
                 }
-                let targeted = token.1 > 0 && !rule.action.isSystemShortcut
+                let flags = Self.shortcutFlags(shortcut, system: !targeted)
+                guard stillCurrent() else { diagnostics.record("action.cancelled", facts.merging(["reason": "context_changed"]) { _, new in new }); return }
                 for event in [down, up] {
-                    event.flags = CGEventFlags(rawValue: shortcut.modifiers)
+                    event.flags = flags
                     event.setIntegerValueField(.eventSourceUserData, value: Self.marker)
                     if targeted { event.postToPid(token.1) }
                     else { event.post(tap: .cghidEventTap) }
                 }
-                diagnostics.record("action.shortcut_posted", facts.merging(["shortcut": shortcut.display, "route": targeted ? "pid" : "system", "pid": String(token.1)]) { _, new in new })
+                diagnostics.record("action.shortcut_posted", facts.merging(["shortcut": shortcut.display, "route": targeted ? "pid" : "system", "pid": String(token.1), "event_flags": String(flags.rawValue, radix: 16)]) { _, new in new })
             }
         }
     }

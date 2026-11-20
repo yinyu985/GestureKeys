@@ -39,13 +39,16 @@ public enum ActionKind: String, Codable, CaseIterable, Sendable {
     case reloadPage, newTab, closeTab, reopenTab, nextTab, previousTab, find
     case cut, copy, paste, selectAll, undo, redo, save
     case hideApp, minimizeWindow, quitApp, fullScreen, showDesktop, appWindows, openFinder, screenshot
+    case openLink, openFileOrFolder
 
-    public static let groups: [(String, [Self])] = [
-        (L10n.text("自定义"), [.shortcut, .openApplication, .block]),
-        (L10n.text("网页与标签页"), [.pageBack, .pageForward, .pageTop, .pageBottom, .reloadPage, .newTab, .closeTab, .reopenTab, .nextTab, .previousTab, .find]),
-        (L10n.text("编辑"), [.cut, .copy, .paste, .selectAll, .undo, .redo, .save]),
-        (L10n.text("窗口与系统"), [.hideApp, .minimizeWindow, .quitApp, .fullScreen, .missionControl, .appWindows, .showDesktop, .nextDesktop, .previousDesktop, .openFinder, .screenshot])
-    ]
+    public static var groups: [(String, [Self])] {
+        [
+            (L10n.text("自定义"), [.shortcut, .openApplication, .openLink, .openFileOrFolder]),
+            (L10n.text("网页与标签页"), [.pageBack, .pageForward, .pageTop, .pageBottom, .reloadPage, .newTab, .closeTab, .reopenTab, .nextTab, .previousTab, .find]),
+            (L10n.text("编辑"), [.cut, .copy, .paste, .selectAll, .undo, .redo, .save]),
+            (L10n.text("窗口与系统"), [.hideApp, .minimizeWindow, .quitApp, .fullScreen, .missionControl, .showDesktop, .nextDesktop, .previousDesktop, .openFinder])
+        ]
+    }
     public var systemAppPath: String? {
         switch self {
         case .missionControl: return "/System/Applications/Mission Control.app"
@@ -54,8 +57,9 @@ public enum ActionKind: String, Codable, CaseIterable, Sendable {
         }
     }
     public var isSystemShortcut: Bool {
-        [.nextDesktop, .previousDesktop, .showDesktop, .appWindows, .screenshot].contains(self)
+        [.shortcut, .nextDesktop, .previousDesktop, .showDesktop, .appWindows, .screenshot].contains(self)
     }
+    public var switchesSpace: Bool { self == .nextDesktop || self == .previousDesktop }
     public var title: String {
         switch self {
         case .shortcut: return L10n.text("发送快捷键")
@@ -64,9 +68,11 @@ public enum ActionKind: String, Codable, CaseIterable, Sendable {
         case .pageTop: return L10n.text("网页到顶")
         case .pageBottom: return L10n.text("网页到底")
         case .missionControl: return L10n.text("调度中心")
-        case .nextDesktop: return L10n.text("下一个桌面")
-        case .previousDesktop: return L10n.text("上一个桌面")
+        case .nextDesktop: return L10n.text("下一个空间")
+        case .previousDesktop: return L10n.text("上一个空间")
         case .openApplication: return L10n.text("打开应用")
+        case .openLink: return L10n.text("打开链接")
+        case .openFileOrFolder: return L10n.text("打开文件或文件夹")
         case .block: return L10n.text("阻止触发")
         case .unassigned: return L10n.text("选择动作")
         case .reloadPage: return L10n.text("刷新网页")
@@ -139,6 +145,8 @@ public struct Rule: Codable, Equatable, Identifiable, Sendable {
     public var action: ActionKind
     public var outputKey: Shortcut?
     public var appPath: String
+    public var linkAddress: String?
+    public var fileOrFolderPath: String?
     public var bundleID: String // empty = all apps
     public var note: String
     public var needsReview: Bool
@@ -166,9 +174,35 @@ public struct Rule: Codable, Equatable, Identifiable, Sendable {
         case .gesture: return "\(Self.buttonName(mouseButton)) · \(ShapePreset(rawValue: shapeName)?.title ?? L10n.text("手绘轨迹"))"
         }
     }
+    public var displayName: String {
+        // Keep user-defined names; only relabel the old names of these two built-in actions.
+        if action == .nextDesktop && ["下一个桌面", "Next Desktop"].contains(name) { return action.title }
+        if action == .previousDesktop && ["上一个桌面", "Previous Desktop"].contains(name) { return action.title }
+        return name
+    }
+    public var shortcutToSend: Shortcut? { action == .shortcut ? outputKey : action.standardShortcut }
+    public static func webURL(_ input: String) -> URL? {
+        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !value.contains(where: { $0.isWhitespace || $0.isNewline }),
+              let components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = components.host, !host.isEmpty, components.user == nil, components.password == nil else { return nil }
+        return components.url
+    }
+    public var locationToOpen: URL? {
+        switch action {
+        case .openLink: return Self.webURL(linkAddress ?? "")
+        case .openFileOrFolder:
+            guard let path = fileOrFolderPath, path.hasPrefix("/"), !path.utf8.contains(0) else { return nil }
+            return URL(fileURLWithPath: path)
+        default: return nil
+        }
+    }
     public var actionDescription: String {
         if action == .shortcut { return outputKey?.display ?? L10n.text("未录入") }
-        if action == .openApplication { return URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent }
+        if action == .openApplication, !appPath.isEmpty { return URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent }
+        if action == .openLink, let host = locationToOpen?.host { return host }
+        if action == .openFileOrFolder, let url = locationToOpen { return url.lastPathComponent }
         return action.title
     }
     public static func buttonName(_ n: Int) -> String {
@@ -185,6 +219,8 @@ public struct Rule: Codable, Equatable, Identifiable, Sendable {
         if action == .unassigned { return L10n.text("请选择执行动作。") }
         if action == .shortcut && outputKey == nil { return L10n.text("请录入要发送的快捷键。") }
         if action == .openApplication && appPath.isEmpty { return L10n.text("请选择要打开的应用。") }
+        if action == .openLink && locationToOpen == nil { return L10n.text("请输入完整的 http:// 或 https:// 链接。") }
+        if action == .openFileOrFolder && locationToOpen == nil { return L10n.text("请选择要打开的文件或文件夹。") }
         if !bundleID.isEmpty && !bundleID.contains(".") { return L10n.text("应用范围需要有效的 bundle ID。") }
         return nil
     }
@@ -257,8 +293,8 @@ public struct Configuration: Codable, Equatable, Sendable {
         }
         rules.append(Rule(name: L10n.text("关闭当前标签或窗口"), kind: .gesture, points: Shape.preset(.upRight), shapeName: "↗", output: Shortcut(13, 0x100000)))
         rules.append(Rule(name: L10n.text("退出当前应用"), kind: .gesture, points: Shape.preset(.v), shapeName: "V", output: Shortcut(12, 0x100000)))
-        rules.append(Rule(name: L10n.text("下一个桌面"), kind: .gesture, points: Shape.preset(.right), shapeName: "→", action: .nextDesktop))
-        rules.append(Rule(name: L10n.text("上一个桌面"), kind: .gesture, points: Shape.preset(.left), shapeName: "←", action: .previousDesktop))
+        rules.append(Rule(name: ActionKind.nextDesktop.title, kind: .gesture, points: Shape.preset(.right), shapeName: "→", action: .nextDesktop))
+        rules.append(Rule(name: ActionKind.previousDesktop.title, kind: .gesture, points: Shape.preset(.left), shapeName: "←", action: .previousDesktop))
         rules.append(Rule(name: L10n.text("复制"), kind: .click, button: 4, output: Shortcut(8, 0x100000)))
         rules.append(Rule(name: L10n.text("粘贴"), kind: .click, button: 3, output: Shortcut(9, 0x100000)))
         var config = Self(rules: rules)

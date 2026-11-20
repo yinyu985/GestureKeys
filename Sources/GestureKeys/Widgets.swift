@@ -239,12 +239,15 @@ final class StrokeCanvasView: NSView {
     }
     override func draw(_ dirtyRect: NSRect) {
         NSColor.controlBackgroundColor.setFill(); NSBezierPath(roundedRect: bounds, xRadius: 10, yRadius: 10).fill()
-        NSColor.separatorColor.withAlphaComponent(0.55).setFill()
-        for x in stride(from: CGFloat(16), to: bounds.width, by: 20) {
-            for y in stride(from: CGFloat(16), to: bounds.height, by: 20) {
-                NSBezierPath(ovalIn: NSRect(x: x, y: y, width: 1.5, height: 1.5)).fill()
+        let pitch: CGFloat = 10
+        let diameter: CGFloat = 1.25
+        let dots = NSBezierPath()
+        for x in stride(from: pitch, through: bounds.width - pitch, by: pitch) {
+            for y in stride(from: pitch, through: bounds.height - pitch, by: pitch) {
+                dots.appendOval(in: NSRect(x: x - diameter / 2, y: y - diameter / 2, width: diameter, height: diameter))
             }
         }
+        NSColor.separatorColor.withAlphaComponent(0.38).setFill(); dots.fill()
         let display = displayedPoints
         if let first = display.first {
             let path = NSBezierPath(); path.move(to: NSPoint(x: first.x, y: first.y))

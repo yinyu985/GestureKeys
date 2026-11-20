@@ -103,8 +103,10 @@ struct ContentView: View {
                 Text(L10n.text("应用范围"))
             } hint: {
                 Text(L10n.text("触发提示")).help(L10n.text("触发规则时显示规则名称"))
-            } controls: {
+            } status: {
                 Text(L10n.text("启用"))
+            } tools: {
+                Color.clear.accessibilityHidden(true)
             }.font(.system(size: 11, weight: .medium)).foregroundStyle(Ink.secondary).frame(height: 24)
             ScrollView {
                 LazyVStack(spacing: 3) {
@@ -135,20 +137,41 @@ struct ContentView: View {
     }
 }
 
-private struct RuleColumns<Trigger: View, Action: View, Scope: View, Hint: View, Controls: View>: View {
+private struct RuleColumns<Trigger: View, Action: View, Scope: View, Hint: View, Status: View, Tools: View>: View {
     @ViewBuilder var trigger: Trigger
     @ViewBuilder var action: Action
     @ViewBuilder var scope: Scope
     @ViewBuilder var hint: Hint
-    @ViewBuilder var controls: Controls
+    @ViewBuilder var status: Status
+    @ViewBuilder var tools: Tools
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 6) {
             trigger.frame(width: 125, alignment: .leading)
-            action.frame(maxWidth: .infinity, alignment: .leading)
+            action.frame(width: 166, alignment: .leading)
             scope.frame(width: 96, alignment: .leading)
-            hint.frame(width: 70, alignment: .center)
-            controls.frame(width: 66, alignment: .leading)
-        }.padding(.horizontal, 10)
+            hint.frame(width: 68)
+            status.frame(width: 48)
+            tools.frame(width: 84, alignment: .trailing)
+        }.padding(.horizontal, 10).frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct RuleIconButton: View {
+    let title: String
+    let icon: String
+    var destructive = false
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        let highlight = destructive ? Ink.danger : Ink.accentText
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 12, weight: .medium))
+                .foregroundStyle(hovered ? highlight : Ink.secondary)
+                .frame(width: 26, height: 26)
+                .background(hovered ? highlight.opacity(0.13) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).onHover { hovered = $0 }.accessibilityLabel(title).help(title)
     }
 }
 
@@ -156,14 +179,13 @@ struct RuleRow: View {
     @ObservedObject var model: AppModel
     @Binding var rule: Rule
     @State private var hovered = false
-    @State private var showMenu = false
     private var friendlyName: String {
         if rule.action == .shortcut, let key = rule.outputKey, rule.name == key.display {
             let names: [Shortcut: String] = [Shortcut(13, 0x100000): L10n.text("关闭标签或窗口"), Shortcut(12, 0x100000): L10n.text("退出应用"),
                 Shortcut(8, 0x100000): L10n.text("复制"), Shortcut(9, 0x100000): L10n.text("粘贴"), Shortcut(36): L10n.text("回车"), Shortcut(33, 0x100000): L10n.text("后退")]
             return names[key] ?? rule.name
         }
-        return rule.name
+        return rule.displayName
     }
     var body: some View {
         RuleColumns {
@@ -189,15 +211,15 @@ struct RuleRow: View {
             }
         } action: {
             Button { model.edit(rule) } label: {
-                HStack(spacing: 16) {
-                    Text(friendlyName).foregroundStyle(Ink.primary).fontWeight(.medium).lineLimit(1)
+                HStack(spacing: 8) {
+                    Text(friendlyName).foregroundStyle(Ink.primary).fontWeight(.medium).lineLimit(1).layoutPriority(1)
                     if rule.action == .shortcut, let key = rule.outputKey, key.display != friendlyName {
                         Text(key.display).font(.system(size: 11, design: .monospaced)).foregroundStyle(Ink.secondary).lineLimit(1).fixedSize()
                     } else if rule.action != .shortcut, rule.actionDescription != friendlyName {
                         Text(rule.actionDescription).foregroundStyle(Ink.secondary).lineLimit(1)
                     }
                 }.font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).help("\(friendlyName) · \(rule.actionDescription)")
+            }.buttonStyle(.plain).help(rule.actionDescription == friendlyName ? friendlyName : "\(friendlyName) · \(rule.actionDescription)")
         } scope: {
             let title = ApplicationNames.scope(for: rule)
             Button { model.edit(rule) } label: {
@@ -207,30 +229,20 @@ struct RuleRow: View {
         } hint: {
             Toggle(L10n.text("显示触发提示：%1$@", "\(friendlyName)"), isOn: Binding(get: { rule.showsName == true }, set: { model.setTriggerHint($0, for: rule.id) }))
                 .labelsHidden().toggleStyle(.switch).controlSize(.mini).help(L10n.text("触发规则时显示规则名称"))
-        } controls: {
-            HStack(spacing: 7) {
-                Toggle(L10n.text("启用 %1$@", "\(friendlyName)"), isOn: Binding(get: { rule.enabled }, set: { model.setEnabled($0, for: rule) })).labelsHidden().toggleStyle(.switch).controlSize(.mini)
-                Button { showMenu.toggle() } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).frame(width: 25, height: 24)
-                        .foregroundStyle(showMenu ? Ink.accentText : Ink.secondary)
-                        .background(showMenu ? Ink.accent.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 5))
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityLabel(L10n.text("规则操作")).help(L10n.text("规则操作"))
-                    .popover(isPresented: $showMenu, arrowEdge: .trailing) {
-                        VStack(spacing: 2) {
-                            PopupRow(title: L10n.text("编辑"), icon: "pencil") { showMenu = false; afterMenu { model.edit(rule) } }
-                            PopupRow(title: L10n.text("复制"), icon: "plus.square.on.square") { showMenu = false; afterMenu { model.duplicate(rule) } }
-                            Rectangle().fill(Ink.border).frame(height: 1).padding(.vertical, 2)
-                            PopupRow(title: L10n.text("删除"), icon: "trash", destructive: true) { showMenu = false; afterMenu { model.confirmDelete(rule) } }
-                        }.popupSurface(width: 132)
-                    }
+        } status: {
+            Toggle(L10n.text("启用 %1$@", "\(friendlyName)"), isOn: Binding(get: { rule.enabled }, set: { model.setEnabled($0, for: rule) }))
+                .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+        } tools: {
+            HStack(spacing: 3) {
+                RuleIconButton(title: L10n.text("编辑"), icon: "pencil") { model.edit(rule) }
+                RuleIconButton(title: L10n.text("复制"), icon: "plus.square.on.square") { model.duplicate(rule) }
+                RuleIconButton(title: L10n.text("删除"), icon: "trash", destructive: true) { model.confirmDelete(rule) }
             }
         }.frame(height: 34)
             .background(hovered ? Ink.rowHover : Ink.surface, in: RoundedRectangle(cornerRadius: 5))
             .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(hovered ? Ink.rowBorderHover : Ink.border))
             .onHover { hovered = $0 }
     }
-    private func afterMenu(_ action: @escaping () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: action) }
 }
 
 private struct GestureThumbnail: View {
@@ -276,6 +288,13 @@ struct PromptPanel: View {
 struct GeneralPanel: View {
     @ObservedObject var model: AppModel
     private let smallButtonWidth: CGFloat = 104
+    @Environment(\.locale) private var locale
+    private func languageTitle(_ language: AppLanguage) -> String {
+        switch language {
+        case .simplifiedChinese: return "简体中文"
+        case .english: return "English"
+        }
+    }
     private var trailColor: Binding<Color> {
         Binding(get: { Color(nsColor: model.configuration.trailStyle.nsColor) }, set: { color in
             guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return }
@@ -288,6 +307,11 @@ struct GeneralPanel: View {
         PanelPage(title: L10n.text("通用")) {
             Surface {
                 VStack(spacing: 4) {
+                    EditorField(label: L10n.text("语言")) {
+                        ChoiceMenu(selection: Binding(get: { model.appLanguage }, set: model.setLanguage),
+                                   options: AppLanguage.allCases, title: languageTitle)
+                    }
+                    DividerLine()
                     EditorField(label: L10n.text("外观")) {
                         ForEach(AppAppearance.allCases, id: \.self) { appearance in
                             SelectionButton(title: appearance.title, selected: model.configuration.appearance == appearance) {
@@ -356,7 +380,7 @@ struct GeneralPanel: View {
                         Button(L10n.text("打开配置文件夹"), action: model.showConfigurationFolder).buttonStyle(QuietButton())
                     }
                     if let date = model.configurationSavedAt {
-                        Text(L10n.text("最近保存：%1$@", date.formatted(.dateTime.year().month().day().hour().minute().second())))
+                        Text(L10n.text("最近保存：%1$@", date.formatted(.dateTime.year().month().day().hour().minute().second().locale(locale))))
                             .font(.system(size: 11)).monospacedDigit().foregroundStyle(Ink.secondary)
                     }
                 }

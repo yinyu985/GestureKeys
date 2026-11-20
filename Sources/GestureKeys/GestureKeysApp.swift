@@ -39,6 +39,9 @@ struct GestureKeysApp: App {
     var body: some Scene {
         Window("GestureKeys", id: "main") {
             ContentView(model: model)
+                .id(model.appLanguage)
+                .environment(\.locale, model.appLanguage.locale)
+                .onChange(of: model.appLanguage) { _ in delegate.refreshStatusTooltip() }
                 .onAppear { delegate.connect(model, reopen: { openWindow(id: "main") }) }
         }
         .defaultSize(width: MainWindowLayout.width, height: MainWindowLayout.height)
@@ -116,9 +119,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else if location == .menuBar && statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             item.button?.image = Brand.statusIcon
-            item.button?.toolTip = L10n.text("GestureKeys — 键盘与鼠标规则")
             let menu = NSMenu(); menu.delegate = self; item.menu = menu; statusItem = item
+            refreshStatusTooltip()
         }
+    }
+    @MainActor func refreshStatusTooltip() {
+        statusItem?.button?.toolTip = L10n.text("GestureKeys — 键盘与鼠标规则")
     }
     @MainActor func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
@@ -158,6 +164,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         do { print("PASS \(try EventEngine.runInputChecks()) input-state checks (no tap, no posted input)") }
         catch { fputs("SMOKE FAIL: \(error)\n", stderr); exit(1) }
+        let systemArrow = Shortcut(123, 0x40000)
+        guard EventEngine.shortcutFlags(systemArrow, system: true) == [.maskControl, .maskSecondaryFn, .maskNumericPad],
+              EventEngine.shortcutFlags(systemArrow, system: false) == .maskControl,
+              EventEngine.shortcutFlags(Shortcut(18, 0x140000), system: true) == [.maskControl, .maskCommand] else {
+            fputs("SMOKE FAIL: system shortcut event flags\n", stderr); exit(1)
+        }
+        print("PASS system arrow events include navigation flags without changing app-local shortcuts")
         guard let button = descendants(view).compactMap({ $0 as? RecorderButton }).first else {
             fputs("SMOKE FAIL: no shortcut recorder\n", stderr); exit(1)
         }
@@ -202,7 +215,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         print("PASS local shortcut recorder")
         model.configuration = original
-        if let gesture = model.configuration.rules.first(where: { $0.kind == .gesture }) {
+        let mode = ProcessInfo.processInfo.environment["GESTUREKEYS_SMOKE_TEST"] ?? "1"
+        if let gesture = model.configuration.rules.first(where: { mode.contains("space-editor") ? $0.action == .previousDesktop : $0.kind == .gesture }) {
             model.edit(gesture)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { self.checkCanvas(window, original: original) }

@@ -112,24 +112,25 @@ private struct ActionPages: View {
     @State private var page = 0
     private let icons = ["slider.horizontal.3", "globe", "pencil", "macwindow"]
     var body: some View {
+        let groups = ActionKind.groups
         ChoiceButton(title: selection.title, width: width, expanded: $expanded) {
             HStack(alignment: .top, spacing: 0) {
                 VStack(spacing: 4) {
-                    ForEach(ActionKind.groups.indices, id: \.self) { index in
-                        PopupRow(title: ActionKind.groups[index].0, icon: icons[index], selected: page == index, showsCheckmark: false) { page = index }
+                    ForEach(groups.indices, id: \.self) { index in
+                        PopupRow(title: groups[index].0, icon: icons[index], selected: page == index, showsCheckmark: false) { page = index }
                     }
                     Spacer(minLength: 0)
                 }.padding(7).frame(width: 176).background(Ink.base.opacity(0.58))
                 Rectangle().fill(Ink.border).frame(width: 1).accessibilityHidden(true)
                 ScrollView {
                     VStack(spacing: 1) {
-                        ForEach(ActionKind.groups[page].1, id: \.self) { action in
+                        ForEach(groups[page].1, id: \.self) { action in
                             PopupRow(title: action.title, selected: selection == action, showsCheckmark: false) { selection = action; expanded = false }
                         }
                     }.padding(7)
                 }.id(page).scrollIndicators(.never).frame(width: 242)
             }.frame(height: 312).background(Ink.sidebar).foregroundStyle(Ink.primary)
-                .onAppear { page = ActionKind.groups.firstIndex(where: { $0.1.contains(selection) }) ?? 0 }
+                .onAppear { page = groups.firstIndex(where: { $0.1.contains(selection) }) ?? 0 }
         }
     }
 }
@@ -169,7 +170,9 @@ struct RuleEditor: View {
     private let controlGap: CGFloat = 8
     private var halfWidth: CGFloat { (controlWidth - controlGap) / 2 }
     init(model: AppModel, draft: RuleDraft) {
-        self.model = model; isNew = draft.isNew; _rule = State(initialValue: draft.rule)
+        self.model = model; isNew = draft.isNew
+        var localRule = draft.rule; localRule.name = localRule.displayName
+        _rule = State(initialValue: localRule)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -214,6 +217,22 @@ struct RuleEditor: View {
                                     model.chooseApplication { rule.appPath = $0.path }
                                 }.lineLimit(1).buttonStyle(QuietButton(width: controlWidth))
                             }
+                        } else if rule.action == .openLink {
+                            DividerLine().padding(.vertical, 3)
+                            EditorField(label: L10n.text("网址")) {
+                                TextField("https://example.com", text: Binding(get: { rule.linkAddress ?? "" }, set: { rule.linkAddress = $0 }))
+                                    .textFieldStyle(.plain).font(.system(size: 12)).accessibilityLabel(L10n.text("网址"))
+                                    .padding(.horizontal, 8).frame(width: controlWidth, height: 27)
+                                    .background(Ink.base, in: RoundedRectangle(cornerRadius: 5))
+                                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Ink.border))
+                            }
+                        } else if rule.action == .openFileOrFolder {
+                            DividerLine().padding(.vertical, 3)
+                            EditorField(label: L10n.text("打开")) {
+                                Button(rule.locationToOpen == nil ? L10n.text("选择文件或文件夹") : rule.actionDescription) {
+                                    model.chooseFileOrFolder { rule.fileOrFolderPath = $0.path }
+                                }.lineLimit(1).buttonStyle(QuietButton(width: controlWidth))
+                            }
                         }
                         DividerLine().padding(.vertical, 3)
                         EditorField(label: L10n.text("应用范围")) {
@@ -233,7 +252,7 @@ struct RuleEditor: View {
                 if let hint = issue ?? hint {
                     Label(hint, systemImage: issue == nil ? "info.circle" : "exclamationmark.circle")
                         .font(.system(size: 11)).foregroundStyle(issue == nil ? Ink.secondary : Ink.danger)
-                        .lineLimit(2)
+                        .lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 8) {
                     EditorInputReadout(style: model.configuration.trailStyle).frame(width: 216, height: 20)
@@ -247,8 +266,8 @@ struct RuleEditor: View {
             .onChange(of: rule) { _ in issue = nil }
     }
     private var editorHeight: CGFloat {
-        let extended = rule.action == .shortcut || rule.action == .openApplication
-        return 268 + (showsTrack ? 218 : 0) + (extended ? 35 : 0) + (issue != nil || hint != nil ? 34 : 0)
+        let extended = [.shortcut, .openApplication, .openLink, .openFileOrFolder].contains(rule.action)
+        return 268 + (showsTrack ? 218 : 0) + (extended ? 35 : 0) + (issue != nil || hint != nil ? 48 : 0)
     }
     private var showsTrack: Bool { rule.kind == .gesture && rule.mouseButton > 0 }
     private var mouseMode: Binding<MouseMode> {
@@ -262,9 +281,13 @@ struct RuleEditor: View {
         })
     }
     private var hint: String? {
+        if rule.action.switchesSpace, let key = rule.action.standardShortcut {
+            return L10n.text("默认使用 %1$@。如果你在「系统设置 → 键盘 → 键盘快捷键 → 调度中心」改过键位，请选「发送快捷键」，录入你实际设置的组合键。", key.display)
+        }
+        if rule.action == .block { return L10n.text("此规则会吞掉输入。例如仅对某个 App 使用时，同一个全局规则不会执行，原来的按键也不会传给该 App。") }
         if rule.kind == .click && rule.mouseButton == 1 { return rule.clickCount == 2 ? L10n.text("若也绑定了单击，单击会等到双击判定结束再触发。") : L10n.text("绑定右键单击会替代普通右键菜单。") }
-        if [.nextDesktop, .previousDesktop, .appWindows, .showDesktop].contains(rule.action) { return L10n.text("使用 macOS 系统快捷键；请确认系统设置中的快捷键已启用。") }
-        if rule.action == .block { return L10n.text("拦下输入但不执行动作。可用于覆盖同一触发方式的全局规则。") }
+        if [.appWindows, .showDesktop].contains(rule.action) { return L10n.text("使用 macOS 系统快捷键；请确认系统设置中的快捷键已启用。") }
+        if rule.action == .redo { return L10n.text("恢复刚撤销的操作。") }
         return nil
     }
     private var trailPreset: Binding<ShapePreset?> {
@@ -296,6 +319,7 @@ struct RuleEditor: View {
     }
     private func save() {
         var normalized = rule; normalized.name = rule.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.action == .openLink { normalized.linkAddress = normalized.locationToOpen?.absoluteString }
         issue = model.commit(normalized, isNew: isNew)
     }
 }

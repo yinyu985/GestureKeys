@@ -45,9 +45,12 @@ struct CoreChecks {
             ("legacy dated backup migration", suite.testLegacyBackup),
             ("trail cap and icon location compatibility", suite.testPreferences),
             ("appearance compatibility and round trip", suite.testAppearance),
+            ("app language preference is independent of system languages", suite.testAppLanguage),
+            ("Space defaults, legacy actions and custom system shortcuts", suite.testSpaceShortcuts),
             ("single and double click scope", suite.testClickScopes),
             ("rule library order", suite.testLibraryOrder),
             ("blank rules and preset coverage", suite.testBlankRulesAndActions),
+            ("opening links, files and folders", suite.testOpenLocations),
             ("actual user export", suite.testActualUserExportWhenSupplied)
         ]
         var passed = 0
@@ -60,6 +63,19 @@ struct CoreChecks {
 }
 
 final class GestureCoreTests {
+    func testAppLanguage() throws {
+        let domain = "GestureKeys-Check-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: domain) else { XCTFail("Cannot create test preferences") }
+        defer { defaults.removePersistentDomain(forName: domain) }
+        defaults.set(["en-US"], forKey: "AppleLanguages")
+        XCTAssertEqual(AppLanguage.load(from: defaults), .simplifiedChinese)
+        XCTAssertEqual(AppLanguage.allCases, [.simplifiedChinese, .english])
+        for language in AppLanguage.allCases.reversed() {
+            language.save(to: defaults)
+            XCTAssertEqual(AppLanguage.load(from: defaults), language)
+            XCTAssertEqual(defaults.stringArray(forKey: "AppleLanguages"), ["en-US"])
+        }
+    }
     func testModifiersDropDeviceBits() {
         XCTAssertEqual(Shortcut(18, 270592), Shortcut(18, 0x40000))
         XCTAssertEqual(Shortcut(18, 270592).display, "⌃1")
@@ -259,6 +275,24 @@ final class GestureCoreTests {
         XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent(ConfigStorage.datedName("config-backup-", date: date))), bytes)
         XCTAssertEqual(try JSONDecoder().decode(Configuration.self, from: Data(contentsOf: storage.url)).rules.count, 11)
     }
+    func testSpaceShortcuts() throws {
+        let left = try JSONDecoder().decode(ActionKind.self, from: Data(#""previousDesktop""#.utf8))
+        let right = try JSONDecoder().decode(ActionKind.self, from: Data(#""nextDesktop""#.utf8))
+        XCTAssertEqual(left.standardShortcut, Shortcut(123, 0x40000))
+        XCTAssertEqual(right.standardShortcut, Shortcut(124, 0x40000))
+        XCTAssertTrue(left.switchesSpace && right.switchesSpace)
+        let oldName = Rule(name: "上一个桌面", action: left)
+        XCTAssertEqual(oldName.displayName, left.title)
+        XCTAssertEqual(oldName.name, "上一个桌面")
+        XCTAssertTrue(oldName.action.isSystemShortcut)
+        XCTAssertEqual(Rule(name: "my rule", action: left).displayName, "my rule")
+        let rule = Rule(name: "Custom previous Space", output: Shortcut(123, 0x20000))
+        let data = try ConfigStorage.encode(Configuration(rules: [rule]))
+        let saved = try JSONDecoder().decode(Configuration.self, from: data)
+        XCTAssertTrue(saved.rules[0].action.isSystemShortcut)
+        XCTAssertEqual(saved.rules[0].shortcutToSend, Shortcut(123, 0x20000))
+        XCTAssertFalse(ActionKind.pageBack.isSystemShortcut)
+    }
     func testAppearance() throws {
         let legacy = Data(#"{"version":1,"rules":[],"showTrail":true}"#.utf8)
         var config = try JSONDecoder().decode(Configuration.self, from: legacy)
@@ -310,10 +344,51 @@ final class GestureCoreTests {
         XCTAssertTrue(rule.points.isEmpty); XCTAssertNotNil(rule.validationError)
         let groups = ActionKind.groups.flatMap { $0.1 }
         XCTAssertEqual(groups.count, Set(groups).count)
-        XCTAssertEqual(Set(groups + [.unassigned]), Set(ActionKind.allCases))
-        for action in groups where ![.shortcut, .openApplication, .block].contains(action) {
+        let legacy: [ActionKind] = [.block, .appWindows, .screenshot]
+        XCTAssertEqual(Set(groups + [.unassigned] + legacy), Set(ActionKind.allCases))
+        for action in legacy {
+            XCTAssertFalse(groups.contains(action))
+            let fixtures = Configuration(rules: [Rule(kind: .click, action: action)])
+            XCTAssertEqual(try? JSONDecoder().decode(Configuration.self, from: ConfigStorage.encode(fixtures)), fixtures)
+            XCTAssertNil(fixtures.rules.first?.validationError)
+        }
+        for action in [.newTab, .closeTab, .reopenTab, .nextTab, .previousTab] as [ActionKind] {
+            XCTAssertTrue(groups.contains(action))
+            XCTAssertNotNil(action.standardShortcut)
+        }
+        for action in groups where ![.shortcut, .openApplication, .openLink, .openFileOrFolder].contains(action) {
             XCTAssertTrue(action.standardShortcut != nil || action.systemAppPath != nil)
         }
+    }
+    func testOpenLocations() throws {
+        var link = Rule(name: "Docs", kind: .click, action: .openLink)
+        XCTAssertNotNil(link.validationError)
+        for input in ["example.com", "https:///no-host", "http://exa mple.com", "file:///tmp/test", "javascript:alert(1)", "https://user:secret@example.com"] {
+            link.linkAddress = input
+            XCTAssertNil(link.locationToOpen)
+            XCTAssertNotNil(link.validationError)
+        }
+        link.linkAddress = "  https://example.com/path?q=test&mode=2#guide  "
+        XCTAssertEqual(link.locationToOpen?.absoluteString, "https://example.com/path?q=test&mode=2#guide")
+        XCTAssertNil(link.validationError)
+        XCTAssertEqual(link.actionDescription, "example.com")
+        XCTAssertNotNil(Rule.webURL("http://127.0.0.1:8080"))
+        var item = Rule(name: "Project files", kind: .click, action: .openFileOrFolder)
+        for path in ["", "./folder", "~/Downloads", "/tmp/not\0allowed"] {
+            item.fileOrFolderPath = path
+            XCTAssertNil(item.locationToOpen)
+            XCTAssertNotNil(item.validationError)
+        }
+        for path in ["/tmp/项目文件", "/tmp/Project files/Notes.txt"] {
+            item.fileOrFolderPath = path
+            XCTAssertEqual(item.locationToOpen?.path, path)
+            XCTAssertNil(item.validationError)
+        }
+        var app = Rule(name: "Finder", kind: .click, action: .openApplication)
+        app.appPath = "/System/Library/CoreServices/Finder.app"
+        XCTAssertNil(app.locationToOpen)
+        let config = Configuration(rules: [link, item, app])
+        XCTAssertEqual(try JSONDecoder().decode(Configuration.self, from: ConfigStorage.encode(config)), config)
     }
     func testActualUserExportWhenSupplied() throws {
         guard let path = ProcessInfo.processInfo.environment["BAB_INPUT"] else { throw XCTSkip("No local export supplied") }

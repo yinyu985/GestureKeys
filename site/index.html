@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="GestureKeys 是一个原生 macOS 工具。用键盘快捷键、鼠标点击和手势执行常用操作，规则和诊断日志留在本机。">
+  <meta name="description" content="在 macOS 上自定义键盘、鼠标按钮和手势。自己挑触发方式、决定执行什么，还能为不同 App 配不同规则。">
   <meta name="theme-color" content="#16181c">
   <title>GestureKeys — 键盘与鼠标规则</title>
   <link rel="icon" href="assets/icon.png" type="image/png">
@@ -17,15 +17,15 @@
   <main>
     <section class="shell hero" aria-labelledby="title">
       <div class="intro">
-        <p class="edition">macOS 工具 <span>·</span> v0.7.0</p>
+        <p class="edition">macOS 工具 <span>·</span> v0.7.1</p>
         <h1 id="title"><span>按一个键。</span><em>划一笔。</em></h1>
-        <p class="lead">把常用操作绑到键盘、鼠标点击和手势。往右上划一下就关掉当前标签页，按 <kbd>⌃ 1</kbd> 就后退。</p>
-        <div class="links"><a class="download" href="https://github.com/yinyu985/GestureKeys/releases/download/v0.7.0/GestureKeys-0.7.0-arm64.zip">下载 macOS 版 <span aria-hidden="true">↓</span></a><a class="secondary" href="https://github.com/yinyu985/GestureKeys/releases/tag/v0.7.0">版本说明 ↗</a></div>
+        <p class="lead">按住右键往右上划，关掉当前标签页。按 <kbd>⌃1</kbd>，回到上一页。常用动作，绑到你顺手的键和手势上。</p>
+        <div class="links"><a class="download" href="https://github.com/yinyu985/GestureKeys/releases/download/v0.7.1/GestureKeys-0.7.1-arm64.zip">下载 macOS 版 <span aria-hidden="true">↓</span></a><a class="secondary" href="https://github.com/yinyu985/GestureKeys/releases/tag/v0.7.1">版本说明 ↗</a></div>
         <p class="platform">macOS 13+ <span>·</span> Apple Silicon</p>
       </div>
       <figure class="demo">
         <div class="app-preview">
-          <img src="assets/rules.webp" width="1530" height="702" alt="GestureKeys 鼠标规则列表。第一条规则用右键向右上划，执行关闭当前标签或窗口。" fetchpriority="high">
+          <img src="assets/rules.webp" width="1700" height="784" alt="GestureKeys 鼠标规则列表。右上手势关闭当前标签或窗口，每行右侧有编辑、复制和删除按钮。" fetchpriority="high">
           <svg class="trace" viewBox="0 0 1000 460" preserveAspectRatio="none" fill="none" aria-hidden="true">
             <path d="M21 354 C54 341 92 300 124 259 S195 198 239 182 Q271 169 354 164"/>
             <circle cx="21" cy="354" r="4"/><circle cx="354" cy="164" r="7"/>
@@ -35,14 +35,34 @@
       </figure>
     </section>
     <div class="feature-band">
-      <section class="shell features" aria-label="功能">
-        <article><span class="symbol" aria-hidden="true">⌃ 1</span><h2>快捷键和鼠标手势</h2><p>用快捷键、单击、双击或手绘轨迹触发动作。规则可以全局生效，也可以只在指定应用生效。</p></article>
-        <article><span class="symbol" aria-hidden="true">↗</span><h2>保存即生效</h2><p>规则随改随用。触发提示按规则开关；浅色、深色和登录时启动在「通用」设置。</p></article>
-        <article><span class="symbol" aria-hidden="true">&gt;_</span><h2>失灵时有日志</h2><p>从收到输入、匹配规则到派发动作，都能用同一个编号查。日志留在本机，不记录普通打字内容。</p></article>
+      <section class="shell features" aria-label="能怎么用">
+        <article>
+          <h2>普通鼠标，也能画手势</h2>
+          <p>按住右键画一笔，让当前 App 执行一个动作。可以选预设，也可以画你自己的轨迹。</p>
+          <ul class="rule-samples" aria-label="示例规则">
+            <li><kbd>右键画 V</kbd><span class="sep">→</span><span>退出当前 App</span></li>
+          </ul>
+        </article>
+        <article>
+          <h2>同一个键，换个 App 换个用法</h2>
+          <p>侧键在浏览器里用来后退，到了访达就回上一级文件夹。不用手动切配置。</p>
+          <ul class="rule-samples" aria-label="示例规则">
+            <li><kbd>侧键</kbd><span class="sep">→</span><span>浏览器：返回上一页</span></li>
+            <li><kbd>侧键</kbd><span class="sep">→</span><span>访达：返回上一级</span></li>
+          </ul>
+        </article>
+        <article>
+          <h2>不只选预设，规则自己定</h2>
+          <p>触发方式和动作可以分开选。想让鼠标按钮打开指定 App，或让自绘手势执行某个菜单的快捷键，都能自己配。</p>
+          <ul class="rule-samples" aria-label="示例规则">
+            <li><kbd>侧键单击</kbd><span class="sep">→</span><span>打开备忘录</span></li>
+            <li><kbd>自绘手势</kbd><span class="sep">→</span><span>执行你录入的快捷键</span></li>
+          </ul>
+        </article>
       </section>
     </div>
     <section class="shell install" id="install">
-      <div class="install-art"><img src="assets/editor.webp" width="956" height="1040" loading="lazy" alt="在 GestureKeys 规则编辑器中设置右键手势。"></div>
+      <div class="install-art"><img src="assets/editor.webp" width="956" height="1042" loading="lazy" alt="在 GestureKeys 规则编辑器中设置右键手势。"></div>
       <div>
         <p class="edition">首次使用</p><h2>解压，拖入「应用程序」</h2>
         <ol>

@@ -27,7 +27,7 @@ img { display: block; width: 100%; height: auto; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -.025em; }
 .brand img { width: 34px; }
 .hero { display: grid; grid-template-columns: 0.73fr 1.25fr; align-items: center; gap: clamp(24px, 5vw, 72px); padding-block: clamp(48px, 8vw, 108px); }
-.edition, .platform, kbd, code, .symbol { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.edition, .platform, kbd, code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .edition { color: var(--blue); font-size: .875rem; letter-spacing: .05em; font-weight: 650; }
 .edition span, .platform span { padding-inline: .35em; }
 h1 { font-size: clamp(3.1rem, 5.45vw, 5rem); line-height: 1.12; letter-spacing: -.065em; margin-block: 14px 24px; }
@@ -54,9 +54,11 @@ figcaption { display: flex; gap: .55em; align-items: center; flex-wrap: wrap; ma
 .features article:first-child { padding-inline-start: 0; }
 .features article:last-child { padding-inline-end: 0; }
 .features article + article { border-inline-start: 1px solid var(--line); }
-.symbol { display: inline-grid; place-items: center; min-width: 42px; min-height: 34px; border: 1px solid var(--line); border-radius: 5px; color: var(--blue); }
-.features h2 { font-size: 1.125rem; margin-block: 12px 6px; }
+.features h2 { font-size: 1.125rem; margin-block-end: 8px; }
 .features p, .install li { color: var(--muted); }
+.rule-samples { display: grid; gap: 5px; padding: 0; margin: 16px 0 0; list-style: none; }
+.rule-samples li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 9px; font-size: .875rem; }
+.rule-samples kbd { color: var(--blue); font-size: .84rem; }
 .install { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: clamp(24px, 7vw, 96px); align-items: center; padding-block: clamp(48px, 8vw, 96px); }
 .install-art { max-width: 380px; }
 .install-art img { border-radius: 10px; border: 1px solid var(--line); }
