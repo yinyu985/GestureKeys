@@ -81,6 +81,8 @@ final class AppModel: ObservableObject {
     private var sheetObservers: [NSObjectProtocol] = []
     private let engine = EventEngine()
     private let hotKeys = GlobalHotKeys()
+    private static let desktopOneShortcut = Shortcut(UInt16(kVK_ANSI_1), CGEventFlags.maskControl.rawValue)
+    @Published private(set) var desktopOneUnavailable = false
     @Published private(set) var unavailableShortcuts: [Shortcut] = []
     @Published private(set) var configurationSavedAt: Date?
     @Published private(set) var loginItemStatus: SMAppService.Status = .notRegistered
@@ -207,10 +209,22 @@ final class AppModel: ObservableObject {
         let context = ["app": foreground, "pid": String(pid), "routing": reason]
         if context != loggedContext { loggedContext = context; diagnostics.record("input.context", context) }
         engine.update(configuration, frontmost: foreground, suspended: suspended, pid: pid)
+        let desktopOne = Self.desktopOneShortcut
+        // Keep the last failure visible when leaving a scoped app to open GestureKeys.
+        if desktopOneUnavailable && (!running || !configuration.rules.contains(where: {
+            $0.kind == .keyboard && $0.enabled && $0.triggerKey == desktopOne && $0.validationError == nil
+        })) {
+            desktopOneUnavailable = false
+        }
         if running && !suspended {
             let wanted = Set(RuleResolver.scoped(configuration.rules, bundleID: foreground).filter { $0.kind == .keyboard }.compactMap(\.triggerKey))
             let failed = hotKeys.replace(with: wanted)
-            if failed != unavailableShortcuts { unavailableShortcuts = failed }
+            if wanted.contains(desktopOne) {
+                let unavailable = failed.contains(desktopOne)
+                if desktopOneUnavailable != unavailable { desktopOneUnavailable = unavailable }
+            }
+            let otherFailures = failed.filter { $0 != desktopOne }
+            if otherFailures != unavailableShortcuts { unavailableShortcuts = otherFailures }
         } else {
             _ = hotKeys.replace(with: [])
         }
