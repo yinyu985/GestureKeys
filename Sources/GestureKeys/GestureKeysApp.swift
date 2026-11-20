@@ -1,6 +1,8 @@
 import SwiftUI
 import AppKit
 import GestureCore
+import Carbon
+import ServiceManagement
 
 enum Brand {
     static let icon = (Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") as? String)
@@ -44,7 +46,7 @@ struct GestureKeysApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("添加规则", action: model.addRule).keyboardShortcut("n").disabled(!model.isRulePage)
+                Button(L10n.text("添加规则"), action: model.addRule).keyboardShortcut("n").disabled(!model.acceptsNewRule)
             }
         }
     }
@@ -54,21 +56,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private weak var model: AppModel?
     private var smokeScheduled = false
+    private var smokeActionRequested = false
     private var reopen: (() -> Void)?
+    private var backgroundLaunch = false
+    private weak var mainWindow: NSWindow?
+
+    @MainActor func applicationDidFinishLaunching(_ notification: Notification) {
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        let loginMarker = event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+            || event?.attributeDescriptor(forKeyword: keyAELaunchedAsLogInItem) != nil
+        let mode = ProcessInfo.processInfo.environment["GESTUREKEYS_SMOKE_TEST"]
+        backgroundLaunch = mode.map { $0 == "login-background" }
+            ?? (loginMarker || (event == nil && SMAppService.mainApp.status == .enabled))
+        diagnostics.record("app.presentation", ["background": String(backgroundLaunch)])
+        if backgroundLaunch { suppressInitialWindow() }
+    }
+    @MainActor private func suppressInitialWindow() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.backgroundLaunch else { return }
+            let window = self.mainWindow ?? NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) })
+            self.mainWindow = window
+            window?.orderOut(nil)
+        }
+    }
     @MainActor func connect(_ model: AppModel, reopen: @escaping () -> Void) {
         self.model = model; self.reopen = reopen
         model.onIconLocationChanged = { [weak self] in self?.updateIconLocation($0) }
         if let window = NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) }) {
+            mainWindow = window
             window.titleVisibility = .hidden; window.titlebarAppearsTransparent = true
-            window.backgroundColor = NSColor(srgbRed: 0.086, green: 0.094, blue: 0.110, alpha: 1)
+            window.backgroundColor = Ink.nsBase
             window.isRestorable = false
             window.styleMask.remove(.resizable)
             window.standardWindowButton(.zoomButton)?.isEnabled = false
         }
+        Ink.apply(model.configuration.appearance)
         updateIconLocation(model.configuration.iconLocation)
+        if backgroundLaunch { suppressInitialWindow() }
         if let mode = ProcessInfo.processInfo.environment["GESTUREKEYS_SMOKE_TEST"], !smokeScheduled {
             smokeScheduled = true
-            if mode.contains("dark") { NSApp.appearance = NSAppearance(named: .darkAqua) }
+            if mode.contains("dark") { model.configuration.appearance = .dark }
+            if mode.contains("light") { model.configuration.appearance = .light }
+            if mode == "login-background" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.verifyBackgroundLaunch() }
+                return
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.smokeTest() }
         }
     }
@@ -84,21 +116,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else if location == .menuBar && statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             item.button?.image = Brand.statusIcon
-            item.button?.toolTip = "GestureKeys — 键盘与鼠标规则"
+            item.button?.toolTip = L10n.text("GestureKeys — 键盘与鼠标规则")
             let menu = NSMenu(); menu.delegate = self; item.menu = menu; statusItem = item
         }
     }
     @MainActor func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        let open = NSMenuItem(title: "打开应用", action: #selector(showWindow), keyEquivalent: "")
+        let open = NSMenuItem(title: L10n.text("打开应用"), action: #selector(showWindow), keyEquivalent: "")
         open.target = self; menu.addItem(open)
-        let quit = NSMenuItem(title: "退出应用", action: #selector(quitApplication), keyEquivalent: "")
+        let quit = NSMenuItem(title: L10n.text("退出应用"), action: #selector(quitApplication), keyEquivalent: "")
         quit.target = self; menu.addItem(quit)
     }
     @MainActor @objc private func quitApplication() { NSApp.terminate(nil) }
     @MainActor @objc private func showWindow() {
+        let wasBackground = backgroundLaunch
+        backgroundLaunch = false
         NSApp.activate(ignoringOtherApps: true)
-        if let window = NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) && $0.isVisible }) {
+        if let window = (wasBackground ? mainWindow : nil) ?? NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) && $0.isVisible }) {
             window.makeKeyAndOrderFront(nil)
         } else { reopen?() }
     }
@@ -108,6 +142,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return true
     }
     @MainActor func applicationWillTerminate(_ notification: Notification) { model?.shutdown() }
+    @MainActor private func verifyBackgroundLaunch() {
+        guard backgroundLaunch, mainWindow?.isVisible == false, let model else {
+            fputs("SMOKE FAIL: login launch showed a window\n", stderr); exit(1)
+        }
+        showWindow()
+        guard mainWindow?.isVisible == true else { fputs("SMOKE FAIL: reopening after login\n", stderr); exit(1) }
+        print("SMOKE PASS: login launch stays in background and can reopen")
+        model.shutdown(); fflush(stdout); exit(0)
+    }
     private func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { descendants($0) } }
     @MainActor private func smokeTest() {
         guard let window = NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) }), let view = window.contentView, let model else {
@@ -119,19 +162,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             fputs("SMOKE FAIL: no shortcut recorder\n", stderr); exit(1)
         }
         let original = model.configuration
-        for page in ["键盘", "鼠标"] {
-            model.filter = page; model.addRule()
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        guard model.routingReason(pid: ownPID) == "none" else { fputs("SMOKE FAIL: own main window routing\n", stderr); exit(1) }
+        for page in [SettingsPage.keyboard, .mouse] {
+            model.page = page; model.addRule()
             guard let draft = model.editor, draft.isNew, draft.rule.enabled, draft.rule.name.isEmpty,
                   draft.rule.triggerKey == nil, draft.rule.outputKey == nil, draft.rule.action == .unassigned,
                   draft.rule.points.isEmpty, model.configuration == original else {
                 fputs("SMOKE FAIL: blank rule draft\n", stderr); exit(1)
             }
+            guard model.routingReason(pid: ownPID) == "rule_editor", model.routingReason(pid: ownPID + 1) == "none" else { exit(1) }
             model.editor = nil
         }
-        model.filter = "键盘"
+        model.prompt = AppPrompt(title: "Test")
+        guard model.routingReason(pid: ownPID) == "confirmation_dialog" else { exit(1) }
+        model.prompt = nil
+        model.page = .keyboard
+        guard model.routingReason(pid: ownPID) == "none" else { exit(1) }
+        print("PASS main window, editor, external app and prompt routing")
         print("PASS new rules are empty, enabled and unsaved")
+        guard let first = original.rules.first else { exit(1) }
+        let initialHint = first.showsName == true
+        model.setTriggerHint(!initialHint, for: first.id)
+        guard let data = try? Data(contentsOf: model.storageURL),
+              let saved = try? JSONDecoder().decode(Configuration.self, from: data),
+              (saved.rules.first?.showsName == true) != initialHint,
+              saved.rules.first?.enabled == first.enabled else {
+            fputs("SMOKE FAIL: trigger hint persistence\n", stderr); exit(1)
+        }
+        model.setTriggerHint(initialHint, for: first.id)
+        print("PASS trigger hint persists independently of rule enablement")
         button.performClick(nil)
-        guard button.capturing, button.title == "请按键" else { fputs("SMOKE FAIL: shortcut capture state\n", stderr); exit(1) }
+        guard button.capturing, button.title == L10n.text("请按键") else { fputs("SMOKE FAIL: shortcut capture state\n", stderr); exit(1) }
         guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control], timestamp: 0,
                   windowNumber: window.windowNumber, context: nil, characters: "5", charactersIgnoringModifiers: "5", isARepeat: false, keyCode: 23) else { exit(1) }
         NSApp.sendEvent(event)
@@ -168,12 +230,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         print("PASS local gesture recorder preserves position and scale")
         model.configuration = original
         let mode = ProcessInfo.processInfo.environment["GESTUREKEYS_SMOKE_TEST"] ?? "1"
-        if mode.contains("gesture") { model.filter = "鼠标" }
+        if mode.contains("gesture") { model.page = .mouse }
         else { model.editor = nil }
-        if mode.contains("general") { model.filter = "通用" }
-        if mode.contains("about") { model.filter = "关于" }
+        if mode.contains("general") { model.page = .general }
+        if mode.contains("about") { model.page = .about }
         if mode == "delete-prompt", let rule = model.configuration.rules.first { model.confirmDelete(rule) }
-        if mode == "action-error" { model.verifyMissingApplication() }
         guard !window.styleMask.contains(.resizable), window.contentMinSize == window.contentMaxSize,
               window.frame.width == MainWindowLayout.width, window.frame.height >= MainWindowLayout.height else {
             fputs("SMOKE FAIL: main window mask=\(window.styleMask.rawValue) frame=\(window.frame) content=\(String(describing: window.contentView?.frame.size)) min=\(window.contentMinSize) max=\(window.contentMaxSize)\n", stderr); exit(1)
@@ -188,12 +249,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.captureSmoke(window, mode: mode) }
             return
         }
-        if mode == "locations" {
+        if mode.contains("locations") {
             verifyIconLocations(window)
             return
         }
         if mode == "action-error" {
-            guard model?.actionError?.contains("找不到应用「测试应用」") == true else {
+            if !smokeActionRequested {
+                smokeActionRequested = true
+                model?.verifyMissingApplication()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { self.captureSmoke(window, mode: mode) }
+                return
+            }
+            guard model?.actionError?.contains(L10n.text("找不到应用「%1$@」", "Test App")) == true else {
                 fputs("SMOKE FAIL: missing application report\n", stderr); exit(1)
             }
             print("PASS missing application reports an action error")
@@ -218,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateIconLocation(.menuBar)
         guard let menu = statusItem?.menu, statusItem?.button?.image?.isTemplate == false, NSApp.activationPolicy() == .accessory else { fputs("SMOKE FAIL: menu-bar visibility\n", stderr); exit(1) }
         menuNeedsUpdate(menu)
-        guard menu.items.map(\.title) == ["打开应用", "退出应用"] else { fputs("SMOKE FAIL: menu actions\n", stderr); exit(1) }
+        guard menu.items.map(\.title) == [L10n.text("打开应用"), L10n.text("退出应用")] else { fputs("SMOKE FAIL: menu actions\n", stderr); exit(1) }
         updateIconLocation(.hidden)
         guard statusItem == nil, NSApp.activationPolicy() == .accessory else { fputs("SMOKE FAIL: hidden visibility\n", stderr); exit(1) }
         window.close()

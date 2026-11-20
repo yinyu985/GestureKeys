@@ -11,6 +11,8 @@ fi
 swift build -c release --product GestureKeys
 BIN="$(swift build -c release --show-bin-path)"
 APP="$PWD/.build/bundle/GestureKeys.app"
+# Remove stale resources so a build without a private seed cannot retain one.
+rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/GestureKeys" "$APP/Contents/MacOS/GestureKeys"
 /usr/libexec/PlistBuddy -c 'Clear dict' "$APP/Contents/Info.plist" >/dev/null 2>&1 || true
@@ -23,8 +25,9 @@ with open(sys.argv[1], 'wb') as f:
         'CFBundleName': 'GestureKeys',
         'CFBundleDisplayName': 'GestureKeys',
         'CFBundlePackageType': 'APPL',
-        'CFBundleShortVersionString': '0.6.2',
-        'CFBundleVersion': '11',
+        'CFBundleShortVersionString': '0.7.0',
+        'CFBundleVersion': '12',
+        'CFBundleDevelopmentRegion': 'zh-Hans',
         'CFBundleIconFile': 'GestureKeys-B2.icns',
         'LSMinimumSystemVersion': '13.0',
         'NSHighResolutionCapable': True,
@@ -32,9 +35,14 @@ with open(sys.argv[1], 'wb') as f:
         'NSInputMonitoringUsageDescription': '识别你配置的鼠标点击和手势。',
     }, f)
 PY
-if [[ -f Resources/InitialRules.json ]]; then
+if [[ $# -gt 0 ]]; then
   cp Resources/InitialRules.json "$APP/Contents/Resources/InitialRules.json"
 fi
+ditto "$BIN/GestureKeys_GestureCore.bundle" "$APP/Contents/Resources/GestureKeys_GestureCore.bundle"
+for language in en zh-Hans; do
+  mkdir -p "$APP/Contents/Resources/$language.lproj"
+  cp "Resources/$language.lproj/InfoPlist.strings" "$APP/Contents/Resources/$language.lproj/"
+done
 swift scripts/make_icon.swift "$APP/Contents/Resources/GestureKeys-B2.icns"
 codesign --force --sign - --identifier local.yy.GestureKeys "$APP"
 codesign --verify --strict "$APP"

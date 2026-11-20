@@ -34,10 +34,10 @@ struct PanelPage<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text(title).font(.system(size: 22, weight: .semibold)).padding(.bottom, 3)
                 content
-            }.padding(.horizontal, 22).padding(.top, 26).padding(.bottom, 14)
+            }.padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 14)
         }.scrollIndicators(.never)
     }
 }
@@ -49,16 +49,16 @@ struct ContentView: View {
             sidebar.frame(width: 168).background(Ink.sidebar, ignoresSafeAreaEdges: .top)
             Rectangle().fill(Ink.border).frame(width: 1).ignoresSafeArea(edges: .top)
             VStack(spacing: 0) {
-                switch model.filter {
-                case "通用": GeneralPanel(model: model)
-                case "关于": AboutPanel()
+                switch model.page {
+                case .general: GeneralPanel(model: model)
+                case .about: AboutPanel()
                 default: library
                 }
                 if let error = footerError { footer(error) }
             }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Ink.base)
         }
         .frame(width: MainWindowLayout.width, height: MainWindowLayout.height)
-        .background(Ink.base).foregroundStyle(Ink.primary).tint(Ink.accent).preferredColorScheme(.dark)
+        .background(Ink.base).foregroundStyle(Ink.primary).tint(Ink.accent).preferredColorScheme(model.configuration.appearance.colorScheme)
         .sheet(item: $model.editor) { draft in RuleEditor(model: model, draft: draft) }
         .sheet(item: $model.prompt) { prompt in PromptPanel(prompt: prompt) }
     }
@@ -68,42 +68,43 @@ struct ContentView: View {
                 Image(nsImage: Brand.icon).resizable().scaledToFit().frame(width: 76, height: 76).accessibilityHidden(true)
                 Text("GestureKeys").font(.system(size: 15, weight: .semibold))
             }.frame(maxWidth: .infinity).padding(.top, 24).padding(.bottom, 20)
-            navigation("键盘", icon: "keyboard")
-            navigation("鼠标", icon: "computermouse")
-            navigation("通用", icon: "gearshape")
-            navigation("关于", icon: "info.circle")
+            ForEach(SettingsPage.allCases, id: \.self) { navigation($0) }
             Spacer()
         }.padding(.horizontal, 10)
     }
-    private func navigation(_ title: String, icon: String) -> some View {
-        Button { model.filter = title } label: {
+    private func navigation(_ page: SettingsPage) -> some View {
+        let selected = model.page == page
+        return Button { model.page = page } label: {
             HStack(spacing: 19) {
-                Image(systemName: icon).font(.system(size: 14)).frame(width: 19).accessibilityHidden(true)
-                Text(title).font(.system(size: 13, weight: model.filter == title ? .semibold : .regular))
+                Image(systemName: page.icon).font(.system(size: 14)).frame(width: 19).accessibilityHidden(true)
+                Text(page.title).font(.system(size: 13, weight: selected ? .semibold : .regular)).lineLimit(1)
                 Spacer(minLength: 0)
-            }.padding(.horizontal, 22).frame(height: 32)
-                .foregroundStyle(model.filter == title ? Ink.primary : Ink.secondary)
-                .background(model.filter == title ? Ink.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(model.filter == title ? Ink.accent.opacity(0.34) : .clear))
+            }.padding(.leading, 22).padding(.trailing, 8).frame(height: 32)
+                .foregroundStyle(selected ? Ink.primary : Ink.secondary)
+                .background(selected ? Ink.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(selected ? Ink.accent.opacity(0.34) : .clear))
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityAddTraits(model.filter == title ? .isSelected : [])
+        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
     }
     private var library: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 9) {
-                Text(model.filter).font(.system(size: 22, weight: .semibold))
-                Text("\(model.visibleRules.count) 条规则").font(.system(size: 11)).foregroundStyle(Ink.secondary)
+                Text(model.page.title).font(.system(size: 22, weight: .semibold))
+                let count = model.visibleRules.count
+                Text(count == 1 ? L10n.text("1 条规则") : L10n.text("%1$@ 条规则", "\(count)")).font(.system(size: 11)).foregroundStyle(Ink.secondary)
                 Spacer()
-                Button(action: model.addRule) { Label("添加规则", systemImage: "plus") }.buttonStyle(QuietButton(prominent: true))
+                Button(action: model.addRule) { Label(L10n.text("添加规则"), systemImage: "plus") }.buttonStyle(QuietButton(prominent: true))
             }.padding(.bottom, 18)
             RuleColumns {
-                Text("触发方式")
+                Text(L10n.text("触发方式"))
             } action: {
-                Text("执行动作")
+                Text(L10n.text("执行动作"))
             } scope: {
-                Text("应用范围")
+                Text(L10n.text("应用范围"))
+            } hint: {
+                Text(L10n.text("触发提示")).help(L10n.text("触发规则时显示规则名称"))
             } controls: {
-                Text("启用")
+                Text(L10n.text("启用"))
             }.font(.system(size: 11, weight: .medium)).foregroundStyle(Ink.secondary).frame(height: 24)
             ScrollView {
                 LazyVStack(spacing: 3) {
@@ -111,7 +112,7 @@ struct ContentView: View {
                         RuleRow(model: model, rule: model.binding(for: rule.id))
                     }
                     if model.visibleRules.isEmpty {
-                        Text("还没有规则").font(.system(size: 13)).foregroundStyle(Ink.secondary)
+                        Text(L10n.text("还没有规则")).font(.system(size: 13)).foregroundStyle(Ink.secondary)
                             .frame(maxWidth: .infinity).padding(.vertical, 38)
                     }
                 }.padding(.bottom, 8)
@@ -121,7 +122,7 @@ struct ContentView: View {
     private var footerError: String? {
         if let error = model.monitorError ?? model.actionError { return error }
         if !model.unavailableShortcuts.isEmpty {
-            return "系统未能注册：\(model.unavailableShortcuts.map(\.display).joined(separator: "、"))"
+            return L10n.text("系统未能注册：%1$@", model.unavailableShortcuts.map(\.display).joined(separator: ", "))
         }
         return nil
     }
@@ -134,16 +135,18 @@ struct ContentView: View {
     }
 }
 
-private struct RuleColumns<Trigger: View, Action: View, Scope: View, Controls: View>: View {
+private struct RuleColumns<Trigger: View, Action: View, Scope: View, Hint: View, Controls: View>: View {
     @ViewBuilder var trigger: Trigger
     @ViewBuilder var action: Action
     @ViewBuilder var scope: Scope
+    @ViewBuilder var hint: Hint
     @ViewBuilder var controls: Controls
     var body: some View {
         HStack(spacing: 12) {
             trigger.frame(width: 125, alignment: .leading)
             action.frame(maxWidth: .infinity, alignment: .leading)
-            scope.frame(width: 114, alignment: .leading)
+            scope.frame(width: 96, alignment: .leading)
+            hint.frame(width: 70, alignment: .center)
             controls.frame(width: 66, alignment: .leading)
         }.padding(.horizontal, 10)
     }
@@ -156,8 +159,8 @@ struct RuleRow: View {
     @State private var showMenu = false
     private var friendlyName: String {
         if rule.action == .shortcut, let key = rule.outputKey, rule.name == key.display {
-            let names: [Shortcut: String] = [Shortcut(13, 0x100000): "关闭标签或窗口", Shortcut(12, 0x100000): "退出应用",
-                Shortcut(8, 0x100000): "复制", Shortcut(9, 0x100000): "粘贴", Shortcut(36): "回车", Shortcut(33, 0x100000): "后退"]
+            let names: [Shortcut: String] = [Shortcut(13, 0x100000): L10n.text("关闭标签或窗口"), Shortcut(12, 0x100000): L10n.text("退出应用"),
+                Shortcut(8, 0x100000): L10n.text("复制"), Shortcut(9, 0x100000): L10n.text("粘贴"), Shortcut(36): L10n.text("回车"), Shortcut(33, 0x100000): L10n.text("后退")]
             return names[key] ?? rule.name
         }
         return rule.name
@@ -167,18 +170,18 @@ struct RuleRow: View {
             if rule.kind == .keyboard {
                 ShortcutRecorder(shortcut: Binding(get: { rule.triggerKey }, set: { key in
                     var edited = rule; edited.triggerKey = key
-                    if let error = model.commit(edited, isNew: false) { model.prompt = AppPrompt(title: "无法修改快捷键", detail: error) }
-                }), onRecording: { model.recording = $0 }).frame(width: 88, height: 24)
+                    if let error = model.commit(edited, isNew: false) { model.prompt = AppPrompt(title: L10n.text("无法修改快捷键"), detail: error) }
+                }), onRecording: { model.recordingShortcut = $0 }).frame(width: 88, height: 24)
             } else {
                 let button = Rule.buttonName(rule.mouseButton)
-                let detail = rule.kind == .gesture ? (ShapePreset(rawValue: rule.shapeName)?.title ?? "手绘轨迹") : (rule.clickCount == 2 ? "双击" : "单击")
+                let detail = rule.kind == .gesture ? (ShapePreset(rawValue: rule.shapeName)?.title ?? L10n.text("手绘轨迹")) : (rule.clickCount == 2 ? L10n.text("双击") : L10n.text("单击"))
                 Button { model.edit(rule) } label: {
                     HStack(spacing: 12) {
-                        Text(button).frame(width: 53, alignment: .leading)
+                        Text(button).frame(width: 63, alignment: .leading)
                         if rule.kind == .gesture {
                             GestureThumbnail(points: rule.points).accessibilityHidden(true)
                         } else {
-                            Text(detail).frame(width: 48).foregroundStyle(Ink.secondary)
+                            Text(detail).frame(width: 50).foregroundStyle(Ink.secondary)
                         }
                     }.font(.system(size: 11, weight: .medium)).foregroundStyle(Ink.accentText).lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
@@ -200,28 +203,31 @@ struct RuleRow: View {
             Button { model.edit(rule) } label: {
                 Text(title).font(.system(size: 11)).foregroundStyle(Ink.secondary).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).help("应用范围：\(title)")
+            }.buttonStyle(.plain).help(L10n.text("应用范围：%1$@", "\(title)"))
+        } hint: {
+            Toggle(L10n.text("显示触发提示：%1$@", "\(friendlyName)"), isOn: Binding(get: { rule.showsName == true }, set: { model.setTriggerHint($0, for: rule.id) }))
+                .labelsHidden().toggleStyle(.switch).controlSize(.mini).help(L10n.text("触发规则时显示规则名称"))
         } controls: {
             HStack(spacing: 7) {
-                Toggle("启用 \(friendlyName)", isOn: Binding(get: { rule.enabled }, set: { model.setEnabled($0, for: rule) })).labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                Toggle(L10n.text("启用 %1$@", "\(friendlyName)"), isOn: Binding(get: { rule.enabled }, set: { model.setEnabled($0, for: rule) })).labelsHidden().toggleStyle(.switch).controlSize(.mini)
                 Button { showMenu.toggle() } label: {
                     Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).frame(width: 25, height: 24)
                         .foregroundStyle(showMenu ? Ink.accentText : Ink.secondary)
                         .background(showMenu ? Ink.accent.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 5))
                         .contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityLabel("规则操作").help("规则操作")
+                }.buttonStyle(.plain).accessibilityLabel(L10n.text("规则操作")).help(L10n.text("规则操作"))
                     .popover(isPresented: $showMenu, arrowEdge: .trailing) {
                         VStack(spacing: 2) {
-                            PopupRow(title: "编辑", icon: "pencil") { showMenu = false; afterMenu { model.edit(rule) } }
-                            PopupRow(title: "复制", icon: "plus.square.on.square") { showMenu = false; afterMenu { model.duplicate(rule) } }
+                            PopupRow(title: L10n.text("编辑"), icon: "pencil") { showMenu = false; afterMenu { model.edit(rule) } }
+                            PopupRow(title: L10n.text("复制"), icon: "plus.square.on.square") { showMenu = false; afterMenu { model.duplicate(rule) } }
                             Rectangle().fill(Ink.border).frame(height: 1).padding(.vertical, 2)
-                            PopupRow(title: "删除", icon: "trash", destructive: true) { showMenu = false; afterMenu { model.confirmDelete(rule) } }
+                            PopupRow(title: L10n.text("删除"), icon: "trash", destructive: true) { showMenu = false; afterMenu { model.confirmDelete(rule) } }
                         }.popupSurface(width: 132)
                     }
             }
         }.frame(height: 34)
-            .background(Color.white.opacity(hovered ? 0.060 : 0.032), in: RoundedRectangle(cornerRadius: 5))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.white.opacity(hovered ? 0.13 : 0.065)))
+            .background(hovered ? Ink.rowHover : Ink.surface, in: RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(hovered ? Ink.rowBorderHover : Ink.border))
             .onHover { hovered = $0 }
     }
     private func afterMenu(_ action: @escaping () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: action) }
@@ -255,7 +261,7 @@ struct PromptPanel: View {
             }
             HStack(spacing: 8) {
                 Spacer()
-                if prompt.confirm != nil { Button("取消") { dismiss() }.buttonStyle(QuietButton()).keyboardShortcut(.cancelAction) }
+                if prompt.confirm != nil { Button(L10n.text("取消")) { dismiss() }.buttonStyle(QuietButton()).keyboardShortcut(.cancelAction) }
                 Button(prompt.confirmTitle) {
                     dismiss()
                     if let next = prompt.confirm { DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: next) }
@@ -263,13 +269,13 @@ struct PromptPanel: View {
                     .keyboardShortcut(prompt.destructive ? KeyboardShortcut("\r", modifiers: [.command]) : .defaultAction)
             }
         }.padding(18).frame(width: 360).fixedSize(horizontal: false, vertical: true)
-            .background(Ink.sidebar).foregroundStyle(Ink.primary).preferredColorScheme(.dark)
+            .background(Ink.sidebar).foregroundStyle(Ink.primary)
     }
 }
 
 struct GeneralPanel: View {
     @ObservedObject var model: AppModel
-    private let smallButtonWidth: CGFloat = 86
+    private let smallButtonWidth: CGFloat = 104
     private var trailColor: Binding<Color> {
         Binding(get: { Color(nsColor: model.configuration.trailStyle.nsColor) }, set: { color in
             guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return }
@@ -279,17 +285,38 @@ struct GeneralPanel: View {
         })
     }
     var body: some View {
-        PanelPage(title: "通用") {
+        PanelPage(title: L10n.text("通用")) {
             Surface {
                 VStack(spacing: 4) {
-                    EditorField(label: "显示手势轨迹") {
-                        Toggle("显示手势轨迹", isOn: $model.configuration.showTrail).labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                    EditorField(label: L10n.text("外观")) {
+                        ForEach(AppAppearance.allCases, id: \.self) { appearance in
+                            SelectionButton(title: appearance.title, selected: model.configuration.appearance == appearance) {
+                                model.configuration.appearance = appearance
+                            }
+                        }
                     }
                     DividerLine()
-                    EditorField(label: "轨迹样式") {
+                    EditorField(label: L10n.text("登录时启动")) {
+                        Toggle(L10n.text("登录时启动"), isOn: Binding(get: { model.loginItemStatus == .enabled }, set: model.setLaunchAtLogin))
+                            .labelsHidden().toggleStyle(.switch).controlSize(.mini).disabled(model.loginItemStatus == .requiresApproval)
+                    }
+                    if model.loginItemStatus == .requiresApproval {
+                        EditorField(label: L10n.text("需要在系统设置中批准登录项")) {
+                            Button(L10n.text("打开登录项"), action: model.showLoginItems).buttonStyle(QuietButton())
+                        }
+                    }
+                }
+            }
+            Surface {
+                VStack(spacing: 4) {
+                    EditorField(label: L10n.text("显示手势轨迹")) {
+                        Toggle(L10n.text("显示手势轨迹"), isOn: $model.configuration.showTrail).labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                    }
+                    DividerLine()
+                    EditorField(label: L10n.text("轨迹样式")) {
                         TrailSample(style: model.configuration.trailStyle).frame(width: 76, height: 30).accessibilityHidden(true)
-                        ColorPicker("轨迹颜色", selection: trailColor, supportsOpacity: false).labelsHidden().controlSize(.small)
-                        Slider(value: Binding(get: { model.configuration.trailStyle.width }, set: { model.configuration.trailStyle.width = $0.rounded() }), in: TrailStyle.widthRange) { Text("轨迹粗细") }
+                        ColorPicker(L10n.text("轨迹颜色"), selection: trailColor, supportsOpacity: false).labelsHidden().controlSize(.small)
+                        Slider(value: Binding(get: { model.configuration.trailStyle.width }, set: { model.configuration.trailStyle.width = $0.rounded() }), in: TrailStyle.widthRange) { Text(L10n.text("轨迹粗细")) }
                             .labelsHidden().controlSize(.small).frame(width: 102)
                         Text("\(Int(model.configuration.trailStyle.width)) pt").font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Ink.secondary).frame(width: 38, alignment: .trailing)
@@ -298,7 +325,7 @@ struct GeneralPanel: View {
             }
             Surface {
                 VStack(alignment: .trailing, spacing: 4) {
-                    EditorField(label: "应用图标") {
+                    EditorField(label: L10n.text("应用图标")) {
                         ForEach(IconLocation.allCases, id: \.self) { location in
                             SelectionButton(title: location.title, selected: model.configuration.iconLocation == location) {
                                 model.configuration.iconLocation = location
@@ -306,38 +333,38 @@ struct GeneralPanel: View {
                         }
                     }
                     if model.configuration.iconLocation == .hidden {
-                        Text("可从「应用程序」重新打开 GestureKeys。")
+                        Text(L10n.text("可从「应用程序」重新打开 GestureKeys。"))
                             .font(.system(size: 11)).foregroundStyle(Ink.secondary)
                     }
                 }
             }
-            sectionTitle("权限")
+            sectionTitle(L10n.text("权限"))
             Surface {
                 VStack(spacing: 5) {
-                    permission("辅助功能", detail: "向应用发送快捷键", granted: model.accessibilityGranted, action: model.requestAccessibility)
+                    permission(L10n.text("辅助功能"), detail: L10n.text("向应用发送快捷键"), granted: model.accessibilityGranted, action: model.requestAccessibility)
                     DividerLine()
-                    permission("输入监控", detail: "识别鼠标点击与手势", granted: model.inputGranted, action: model.requestInput)
+                    permission(L10n.text("输入监控"), detail: L10n.text("识别鼠标点击与手势"), granted: model.inputGranted, action: model.requestInput)
                 }
             }
-            sectionTitle("配置")
+            sectionTitle(L10n.text("配置"))
             Surface {
                 VStack(alignment: .leading, spacing: 7) {
                     HStack(spacing: 7) {
-                        Button("导入", action: model.importConfiguration).buttonStyle(QuietButton(prominent: true, width: smallButtonWidth))
-                        Button("导出", action: model.exportConfiguration).buttonStyle(QuietButton(width: smallButtonWidth))
+                        Button(L10n.text("导入"), action: model.importConfiguration).buttonStyle(QuietButton(prominent: true, width: smallButtonWidth))
+                        Button(L10n.text("导出"), action: model.exportConfiguration).buttonStyle(QuietButton(width: smallButtonWidth))
                         Spacer()
-                        Button("打开配置文件夹", action: model.showConfigurationFolder).buttonStyle(QuietButton())
+                        Button(L10n.text("打开配置文件夹"), action: model.showConfigurationFolder).buttonStyle(QuietButton())
                     }
                     if let date = model.configurationSavedAt {
-                        Text("最近保存：\(date.formatted(.dateTime.year().month().day().hour().minute().second()))")
+                        Text(L10n.text("最近保存：%1$@", date.formatted(.dateTime.year().month().day().hour().minute().second())))
                             .font(.system(size: 11)).monospacedDigit().foregroundStyle(Ink.secondary)
                     }
                 }
             }
-            sectionTitle("排障")
+            sectionTitle(L10n.text("排障"))
             Surface {
-                EditorField(label: "诊断日志") {
-                    Button("在 Finder 中显示", action: model.showDiagnosticLog).buttonStyle(QuietButton())
+                EditorField(label: L10n.text("诊断日志")) {
+                    Button(L10n.text("在 Finder 中显示"), action: model.showDiagnosticLog).buttonStyle(QuietButton())
                 }
             }
         }
@@ -348,7 +375,7 @@ struct GeneralPanel: View {
             Text(title).font(.system(size: 12))
             Text(detail).font(.system(size: 11)).foregroundStyle(Ink.secondary)
             Spacer()
-            Button(granted ? "查看" : "授权", action: action).buttonStyle(QuietButton(prominent: !granted, width: smallButtonWidth))
+            Button(granted ? L10n.text("查看") : L10n.text("授权"), action: action).buttonStyle(QuietButton(prominent: !granted, width: smallButtonWidth))
         }.frame(minHeight: 30)
     }
 }
@@ -370,7 +397,7 @@ private struct TrailSample: View {
 struct AboutPanel: View {
     private var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—" }
     var body: some View {
-        PanelPage(title: "关于") {
+        PanelPage(title: L10n.text("关于")) {
             Surface {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
@@ -379,9 +406,9 @@ struct AboutPanel: View {
                         Text(version).font(.system(size: 11, design: .monospaced)).foregroundStyle(Ink.accentText)
                             .padding(.horizontal, 7).padding(.vertical, 3).background(Ink.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 4))
                     }
-                    Text("用全局快捷键、鼠标点击或手势，执行常用操作。").font(.system(size: 12)).foregroundStyle(Ink.secondary)
+                    Text(L10n.text("用全局快捷键、鼠标点击或手势，执行常用操作。")).font(.system(size: 12)).foregroundStyle(Ink.secondary)
                     DividerLine()
-                    Text("规则与备份仅保存在本机。关闭窗口后，已启用的规则仍会在后台运行。")
+                    Text(L10n.text("规则与备份仅保存在本机。关闭窗口后，已启用的规则仍会在后台运行。"))
                         .font(.system(size: 11)).foregroundStyle(Ink.secondary).fixedSize(horizontal: false, vertical: true)
                 }.padding(4)
             }

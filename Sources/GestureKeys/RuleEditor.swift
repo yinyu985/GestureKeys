@@ -47,7 +47,7 @@ struct PopupRow: View {
 
 extension View {
     func popupSurface(width: CGFloat) -> some View {
-        self.padding(5).frame(width: width).background(Ink.sidebar).foregroundStyle(Ink.primary).preferredColorScheme(.dark)
+        self.padding(5).frame(width: width).background(Ink.sidebar).foregroundStyle(Ink.primary)
     }
 }
 
@@ -83,7 +83,7 @@ private struct ChoiceButton<Popup: View>: View {
                 .background(Ink.accent.opacity(!enabled ? 0.025 : expanded || hovered ? 0.14 : 0.075), in: RoundedRectangle(cornerRadius: 5))
                 .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Ink.accent.opacity(!enabled ? 0.13 : expanded || hovered ? 0.60 : 0.34)))
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).onHover { hovered = $0 }.accessibilityHint("打开选项")
+        }.buttonStyle(.plain).onHover { hovered = $0 }.accessibilityHint(L10n.text("打开选项"))
             .popover(isPresented: $expanded, arrowEdge: .bottom) { popup }
     }
 }
@@ -119,7 +119,7 @@ private struct ActionPages: View {
                         PopupRow(title: ActionKind.groups[index].0, icon: icons[index], selected: page == index, showsCheckmark: false) { page = index }
                     }
                     Spacer(minLength: 0)
-                }.padding(7).frame(width: 160).background(Ink.base.opacity(0.58))
+                }.padding(7).frame(width: 176).background(Ink.base.opacity(0.58))
                 Rectangle().fill(Ink.border).frame(width: 1).accessibilityHidden(true)
                 ScrollView {
                     VStack(spacing: 1) {
@@ -127,8 +127,8 @@ private struct ActionPages: View {
                             PopupRow(title: action.title, selected: selection == action, showsCheckmark: false) { selection = action; expanded = false }
                         }
                     }.padding(7)
-                }.id(page).scrollIndicators(.never).frame(width: 200)
-            }.frame(height: 312).background(Ink.sidebar).foregroundStyle(Ink.primary).preferredColorScheme(.dark)
+                }.id(page).scrollIndicators(.never).frame(width: 242)
+            }.frame(height: 312).background(Ink.sidebar).foregroundStyle(Ink.primary)
                 .onAppear { page = ActionKind.groups.firstIndex(where: { $0.1.contains(selection) }) ?? 0 }
         }
     }
@@ -137,7 +137,7 @@ private struct ActionPages: View {
 private enum MouseMode: CaseIterable {
     case gesture, singleClick, doubleClick
     var title: String {
-        switch self { case .gesture: return "手势"; case .singleClick: return "单击"; case .doubleClick: return "双击" }
+        switch self { case .gesture: return L10n.text("手势"); case .singleClick: return L10n.text("单击"); case .doubleClick: return L10n.text("双击") }
     }
 }
 
@@ -151,11 +151,11 @@ enum ApplicationNames {
         return name.lowercased().hasSuffix(".app") ? String(name.dropLast(4)) : name
     }
     static func scope(for rule: Rule) -> String {
-        guard !rule.bundleID.isEmpty else { return "所有应用" }
-        if rule.bundleID == "com.apple.finder" { return "访达" }
+        guard !rule.bundleID.isEmpty else { return L10n.text("所有应用") }
+        if rule.bundleID == "com.apple.finder" { return L10n.text("访达") }
         if let name = rule.scopeName, !name.isEmpty { return name }
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: rule.bundleID) { return name(url) }
-        return "应用不可用"
+        return L10n.text("应用不可用")
     }
 }
 
@@ -175,32 +175,27 @@ struct RuleEditor: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: rule.kind == .keyboard ? "keyboard" : "computermouse").foregroundStyle(Ink.accentText)
-                Text(isNew ? "添加规则" : "编辑规则").font(.system(size: 17, weight: .semibold))
+                Text(isNew ? L10n.text("添加规则") : L10n.text("编辑规则")).font(.system(size: 17, weight: .semibold))
                 Spacer()
             }.padding(.horizontal, 16).frame(height: 40)
             DividerLine()
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     Surface(verticalInset: 5) {
-                        EditorField(label: "规则名称") {
-                            HStack(spacing: controlGap) {
-                                TextField("输入名称", text: $rule.name).textFieldStyle(.plain).font(.system(size: 12))
-                                    .accessibilityLabel("规则名称").padding(.horizontal, 8).frame(width: halfWidth, height: 27)
-                                    .background(Ink.base, in: RoundedRectangle(cornerRadius: 5))
-                                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Ink.border))
-                                SelectionButton(title: "触发时显示", selected: rule.showsName == true, width: halfWidth) {
-                                    rule.showsName = rule.showsName == true ? nil : true
-                                }.help("触发规则时显示规则名称")
-                            }
+                        EditorField(label: L10n.text("规则名称")) {
+                            TextField(L10n.text("输入名称"), text: $rule.name).textFieldStyle(.plain).font(.system(size: 12))
+                                .accessibilityLabel(L10n.text("规则名称")).padding(.horizontal, 8).frame(width: controlWidth, height: 27)
+                                .background(Ink.base, in: RoundedRectangle(cornerRadius: 5))
+                                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Ink.border))
                         }
                         DividerLine().padding(.vertical, 3)
-                        EditorField(label: "触发方式") {
+                        EditorField(label: L10n.text("触发方式")) {
                             if rule.kind == .keyboard {
                                 ShortcutRecorder(shortcut: $rule.triggerKey).frame(width: controlWidth, height: 27)
                             } else {
                                 HStack(spacing: controlGap) {
                                     ChoiceMenu(selection: $rule.mouseButton, options: Array(1...7), width: halfWidth, title: Rule.buttonName)
-                                    ChoiceMenu(selection: mouseMode, options: MouseMode.allCases, width: halfWidth) { rule.mouseButton == 0 ? "选择方式" : $0.title }
+                                    ChoiceMenu(selection: mouseMode, options: MouseMode.allCases, width: halfWidth) { rule.mouseButton == 0 ? L10n.text("选择方式") : $0.title }
                                         .disabled(rule.mouseButton == 0)
                                 }
                             }
@@ -208,27 +203,27 @@ struct RuleEditor: View {
                     }
                     if showsTrack { track }
                     Surface(verticalInset: 5) {
-                        EditorField(label: "执行动作") { ActionPages(selection: $rule.action, width: controlWidth) }
+                        EditorField(label: L10n.text("执行动作")) { ActionPages(selection: $rule.action, width: controlWidth) }
                         if rule.action == .shortcut {
                             DividerLine().padding(.vertical, 3)
-                            EditorField(label: "发送快捷键") { ShortcutRecorder(shortcut: $rule.outputKey).frame(width: controlWidth, height: 27) }
+                            EditorField(label: L10n.text("发送快捷键")) { ShortcutRecorder(shortcut: $rule.outputKey).frame(width: controlWidth, height: 27) }
                         } else if rule.action == .openApplication {
                             DividerLine().padding(.vertical, 3)
-                            EditorField(label: "打开") {
-                                Button(rule.appPath.isEmpty ? "选择要打开的应用" : ApplicationNames.name(URL(fileURLWithPath: rule.appPath))) {
+                            EditorField(label: L10n.text("打开")) {
+                                Button(rule.appPath.isEmpty ? L10n.text("选择要打开的应用") : ApplicationNames.name(URL(fileURLWithPath: rule.appPath))) {
                                     model.chooseApplication { rule.appPath = $0.path }
                                 }.lineLimit(1).buttonStyle(QuietButton(width: controlWidth))
                             }
                         }
                         DividerLine().padding(.vertical, 3)
-                        EditorField(label: "应用范围") {
-                            SelectionButton(title: "所有应用", selected: rule.bundleID.isEmpty, width: halfWidth) { rule.bundleID = ""; rule.scopeName = nil }
-                            SelectionButton(title: rule.bundleID.isEmpty ? "选择应用" : ApplicationNames.scope(for: rule), selected: !rule.bundleID.isEmpty, width: halfWidth) {
+                        EditorField(label: L10n.text("应用范围")) {
+                            SelectionButton(title: L10n.text("所有应用"), selected: rule.bundleID.isEmpty, width: halfWidth) { rule.bundleID = ""; rule.scopeName = nil }
+                            SelectionButton(title: rule.bundleID.isEmpty ? L10n.text("选择应用") : ApplicationNames.scope(for: rule), selected: !rule.bundleID.isEmpty, width: halfWidth) {
                                 model.chooseApplication { url in
-                                    guard let id = Bundle(url: url)?.bundleIdentifier else { issue = "无法识别这个应用，请选择另一个。"; return }
+                                    guard let id = Bundle(url: url)?.bundleIdentifier else { issue = L10n.text("无法识别这个应用，请选择另一个。"); return }
                                     rule.bundleID = id; rule.scopeName = ApplicationNames.name(url)
                                 }
-                            }.help("选择生效的应用")
+                            }.help(L10n.text("选择生效的应用"))
                         }
                     }
                 }.padding(.horizontal, 16).padding(.vertical, 9)
@@ -243,12 +238,12 @@ struct RuleEditor: View {
                 HStack(spacing: 8) {
                     EditorInputReadout(style: model.configuration.trailStyle).frame(width: 216, height: 20)
                     Spacer()
-                    Button("取消") { diagnostics.record("rule.editor_cancelled", diagnosticRule(rule)); dismiss() }.buttonStyle(QuietButton()).keyboardShortcut(.cancelAction)
-                    Button("保存", action: save).buttonStyle(QuietButton(prominent: true)).keyboardShortcut(.defaultAction)
+                    Button(L10n.text("取消")) { diagnostics.record("rule.editor_cancelled", diagnosticRule(rule)); dismiss() }.buttonStyle(QuietButton()).keyboardShortcut(.cancelAction)
+                    Button(L10n.text("保存"), action: save).buttonStyle(QuietButton(prominent: true)).keyboardShortcut(.defaultAction)
                 }
             }.padding(.horizontal, 16).padding(.vertical, 9)
         }.frame(width: 478, height: editorHeight)
-            .background(Ink.base).foregroundStyle(Ink.primary).tint(Ink.accent).preferredColorScheme(.dark)
+            .background(Ink.base).foregroundStyle(Ink.primary).tint(Ink.accent)
             .onChange(of: rule) { _ in issue = nil }
     }
     private var editorHeight: CGFloat {
@@ -267,9 +262,9 @@ struct RuleEditor: View {
         })
     }
     private var hint: String? {
-        if rule.kind == .click && rule.mouseButton == 1 { return rule.clickCount == 2 ? "若也绑定了单击，单击会等到双击判定结束再触发。" : "绑定右键单击会替代普通右键菜单。" }
-        if [.nextDesktop, .previousDesktop, .appWindows, .showDesktop].contains(rule.action) { return "使用 macOS 系统快捷键；请确认系统设置中的快捷键已启用。" }
-        if rule.action == .block { return "拦下输入但不执行动作。可用于覆盖同一触发方式的全局规则。" }
+        if rule.kind == .click && rule.mouseButton == 1 { return rule.clickCount == 2 ? L10n.text("若也绑定了单击，单击会等到双击判定结束再触发。") : L10n.text("绑定右键单击会替代普通右键菜单。") }
+        if [.nextDesktop, .previousDesktop, .appWindows, .showDesktop].contains(rule.action) { return L10n.text("使用 macOS 系统快捷键；请确认系统设置中的快捷键已启用。") }
+        if rule.action == .block { return L10n.text("拦下输入但不执行动作。可用于覆盖同一触发方式的全局规则。") }
         return nil
     }
     private var trailPreset: Binding<ShapePreset?> {
@@ -282,18 +277,18 @@ struct RuleEditor: View {
     private var track: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
-                sectionTitle("轨迹")
+                sectionTitle(L10n.text("轨迹"))
                 Spacer()
                 ChoiceMenu(selection: trailPreset, options: ShapePreset.editorOptions.map(Optional.some), width: 144) {
-                    $0?.title ?? (rule.points.isEmpty ? "预设轨迹" : "手绘轨迹")
+                    $0?.title ?? (rule.points.isEmpty ? L10n.text("预设轨迹") : L10n.text("手绘轨迹"))
                 }
-                Button("清空") {
+                Button(L10n.text("清空")) {
                     rule.points = []; rule.shapeName = ""
                     diagnostics.record("rule.gesture_cleared", ["rule": rule.id.uuidString])
                 }.buttonStyle(QuietButton()).disabled(rule.points.isEmpty)
             }
             StrokeCanvas(points: rule.points, preset: ShapePreset(rawValue: rule.shapeName), style: model.configuration.trailStyle) { points in
-                rule.points = points; rule.shapeName = "自定义"
+                rule.points = points; rule.shapeName = ""
                 diagnostics.record("rule.gesture_drawn", ["rule": rule.id.uuidString, "point_count": String(points.count)])
             }.frame(height: 178).clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Ink.border))

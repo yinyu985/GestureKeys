@@ -99,7 +99,7 @@ final class EventEngine: @unchecked Sendable {
               let source = CFMachPortCreateRunLoopSource(nil, port, 0) else {
             lock.lock(); thread = nil; lock.unlock()
             diagnostics.record("tap.start_failed")
-            status(false, "无法监听输入。请授予辅助功能和输入监控权限，然后重试。")
+            status(false, L10n.text("无法监听输入。请授予辅助功能和输入监控权限，然后重试。"))
             return
         }
         let runLoop = CFRunLoopGetCurrent()!
@@ -202,14 +202,14 @@ final class EventEngine: @unchecked Sendable {
                     }
                     guard FileManager.default.fileExists(atPath: target) else {
                         diagnostics.record("action.open_failed", facts.merging(["reason": "application_not_found"]) { _, new in new })
-                        failure("找不到应用「\(name)」")
+                        failure(L10n.text("找不到应用「%1$@」", "\(name)"))
                         return
                     }
                     diagnostics.record("action.open_requested", facts)
                     NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { application, error in
                         if let error {
                             diagnostics.record("action.open_failed", facts.merging(diagnosticError(error)) { _, new in new })
-                            DispatchQueue.main.async { failure("无法打开「\(name)」：\(error.localizedDescription)") }
+                            DispatchQueue.main.async { failure(L10n.text("无法打开「%1$@」：%2$@", "\(name)", "\(error.localizedDescription)")) }
                         } else if let application {
                             diagnostics.record("action.open_confirmed", facts.merging(["target_bundle": application.bundleIdentifier ?? ""]) { _, new in new })
                         } else { diagnostics.record("action.open_unconfirmed", facts) }
@@ -364,7 +364,7 @@ final class EventEngine: @unchecked Sendable {
             return e
         }
         func require(_ condition: Bool, _ name: String) throws {
-            if !condition { throw ConfigError.invalid("输入状态机检查失败：\(name)") }
+            if !condition { throw ConfigError.invalid(L10n.text("输入状态机检查失败：%1$@", "\(name)")) }
             checks += 1
         }
         func mouse(_ e: EventEngine, _ type: CGEventType, _ x: Double, _ y: Double,

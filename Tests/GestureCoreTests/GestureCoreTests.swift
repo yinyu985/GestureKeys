@@ -44,6 +44,7 @@ struct CoreChecks {
             ("diagnostic log rotation and JSON lines", suite.testDiagnostics),
             ("legacy dated backup migration", suite.testLegacyBackup),
             ("trail cap and icon location compatibility", suite.testPreferences),
+            ("appearance compatibility and round trip", suite.testAppearance),
             ("single and double click scope", suite.testClickScopes),
             ("rule library order", suite.testLibraryOrder),
             ("blank rules and preset coverage", suite.testBlankRulesAndActions),
@@ -258,6 +259,19 @@ final class GestureCoreTests {
         XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent(ConfigStorage.datedName("config-backup-", date: date))), bytes)
         XCTAssertEqual(try JSONDecoder().decode(Configuration.self, from: Data(contentsOf: storage.url)).rules.count, 11)
     }
+    func testAppearance() throws {
+        let legacy = Data(#"{"version":1,"rules":[],"showTrail":true}"#.utf8)
+        var config = try JSONDecoder().decode(Configuration.self, from: legacy)
+        XCTAssertEqual(config.appearance, .system)
+        XCTAssertNil(config.storedAppearance)
+        for appearance in AppAppearance.allCases {
+            config.appearance = appearance
+            let saved = try JSONDecoder().decode(Configuration.self, from: ConfigStorage.encode(config))
+            XCTAssertEqual(saved.appearance, appearance)
+        }
+        config.appearance = .system
+        XCTAssertNil(config.storedAppearance)
+    }
     func testPreferences() throws {
         var legacy = Configuration.defaults
         legacy.trailStyle.width = 12
@@ -307,7 +321,7 @@ final class GestureCoreTests {
         XCTAssertEqual(result.configuration.rules.count, 11)
         XCTAssertEqual(result.configuration.rules.filter { $0.kind == .keyboard }.count, 4)
         XCTAssertEqual(result.configuration.rules.filter(\.needsReview).count, 0)
-        XCTAssertTrue(result.warnings.contains("已跳过 5 条不支持的规则。"))
+        XCTAssertTrue(result.warnings.contains(L10n.text("已跳过 %1$@ 条不支持的规则。", "5")))
         XCTAssertTrue(RuleResolver.conflicts(result.configuration.rules).isEmpty)
         if let output = ProcessInfo.processInfo.environment["GK_SEED_OUTPUT"] {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

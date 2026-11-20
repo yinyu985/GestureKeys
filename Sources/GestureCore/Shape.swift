@@ -8,16 +8,16 @@ public enum ShapePreset: String, CaseIterable, Identifiable {
     public static let editorOptions: [Self] = [.up, .down, .upRight, .upLeft, .c, .v, .l, .two, .six, .seven, .less, .greater]
     public var title: String {
         switch self {
-        case .up: return "由下往上"
-        case .down: return "由上往下"
-        case .upRight: return "从左下到右上"
-        case .upLeft: return "从右下到左上"
-        case .right: return "由左往右"
-        case .left: return "由右往左"
-        case .two, .six, .seven: return "数字 \(rawValue)"
-        case .less: return "小于号 <"
-        case .greater: return "大于号 >"
-        default: return "字母 \(rawValue)"
+        case .up: return L10n.text("由下往上")
+        case .down: return L10n.text("由上往下")
+        case .upRight: return L10n.text("从左下到右上")
+        case .upLeft: return L10n.text("从右下到左上")
+        case .right: return L10n.text("由左往右")
+        case .left: return L10n.text("由右往左")
+        case .two, .six, .seven: return L10n.text("数字 %1$@", "\(rawValue)")
+        case .less: return L10n.text("小于号 <")
+        case .greater: return L10n.text("大于号 >")
+        default: return L10n.text("字母 %1$@", "\(rawValue)")
         }
     }
 }

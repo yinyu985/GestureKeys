@@ -2,19 +2,47 @@ import AppKit
 import SwiftUI
 import GestureCore
 
+extension AppAppearance {
+    var title: String {
+        switch self { case .system: return L10n.text("跟随系统"); case .light: return L10n.text("浅色"); case .dark: return L10n.text("深色") }
+    }
+    var colorScheme: ColorScheme? {
+        switch self { case .system: return nil; case .light: return .light; case .dark: return .dark }
+    }
+}
+
 enum Ink {
-    static let base = Color(red: 0.086, green: 0.094, blue: 0.110)
-    static let sidebar = Color(red: 0.110, green: 0.120, blue: 0.139)
-    static let border = Color.white.opacity(0.085)
-    static let surface = Color.white.opacity(0.035)
-    static let accent = Color(red: 0.478, green: 0.654, blue: 1)
-    static let accentText = Color(red: 0.655, green: 0.765, blue: 1)
-    static let primary = Color(red: 0.902, green: 0.925, blue: 0.973)
-    static let secondary = Color(red: 0.64, green: 0.67, blue: 0.72)
-    static let muted = Color(red: 0.48, green: 0.51, blue: 0.57)
-    static let nsAccent = NSColor(srgbRed: 0.478, green: 0.654, blue: 1, alpha: 1)
-    static let nsDanger = NSColor(srgbRed: 1, green: 0.60, blue: 0.60, alpha: 1)
+    private static func rgb(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: CGFloat(hex >> 16) / 255, green: CGFloat((hex >> 8) & 255) / 255,
+                blue: CGFloat(hex & 255) / 255, alpha: alpha)
+    }
+    private static func adaptive(_ light: NSColor, _ dark: NSColor) -> NSColor {
+        NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light }
+    }
+    static let nsBase = adaptive(rgb(0xF8FAFD), rgb(0x16181C))
+    static let base = Color(nsColor: nsBase)
+    static let sidebar = Color(nsColor: adaptive(rgb(0xEDF1F7), rgb(0x1C1F23)))
+    static let border = Color(nsColor: adaptive(rgb(0x20334E, 0.15), rgb(0xFFFFFF, 0.085)))
+    static let surface = Color(nsColor: adaptive(rgb(0xFFFFFF, 0.86), rgb(0xFFFFFF, 0.035)))
+    static let rowHover = Color(nsColor: adaptive(rgb(0xEAF1FA), rgb(0xFFFFFF, 0.060)))
+    static let rowBorderHover = Color(nsColor: adaptive(rgb(0x20334E, 0.25), rgb(0xFFFFFF, 0.13)))
+    static let nsAccent = adaptive(rgb(0x285BB4), rgb(0x7AA7FF))
+    static let nsAccentText = adaptive(rgb(0x204F9F), rgb(0xA7C3FF))
+    static let accent = Color(nsColor: nsAccent)
+    static let accentText = Color(nsColor: nsAccentText)
+    static let primary = Color(nsColor: adaptive(rgb(0x192638), rgb(0xE6ECF8)))
+    static let secondary = Color(nsColor: adaptive(rgb(0x4B5C73), rgb(0xA3ABB8)))
+    static let muted = Color(nsColor: adaptive(rgb(0x5E6E84), rgb(0x8995AA)))
+    static let nsDanger = adaptive(rgb(0xA82635), rgb(0xFF9999))
     static let danger = Color(nsColor: nsDanger)
+
+    @MainActor static func apply(_ appearance: AppAppearance) {
+        switch appearance {
+        case .system: NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
 }
 
 struct EditorInputReadout: NSViewRepresentable {
@@ -33,7 +61,7 @@ final class EditorInputReadoutLabel: NSTextField {
         isEditable = false; isSelectable = false; isBordered = false; drawsBackground = false
         font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         lineBreakMode = .byTruncatingTail
-        setAccessibilityLabel("当前按下的是")
+        setAccessibilityLabel(L10n.text("当前按下的是"))
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -47,13 +75,13 @@ final class EditorInputReadoutLabel: NSTextField {
             if event.type == .keyDown {
                 self.show(Shortcut(event.keyCode, UInt64(event.modifierFlags.rawValue)).display)
             } else {
-                self.show(event.buttonNumber == 0 ? "左键" : Rule.buttonName(event.buttonNumber))
+                self.show(event.buttonNumber == 0 ? L10n.text("左键") : Rule.buttonName(event.buttonNumber))
             }
             return event
         }
     }
     private func show(_ title: String) {
-        stringValue = "当前按下的是：\(title)"
+        stringValue = L10n.text("当前按下的是：%1$@", "\(title)")
         expiry?.invalidate()
         let timer = Timer(timeInterval: 1.4, repeats: false) { [weak self] _ in self?.stringValue = "" }
         expiry = timer; RunLoop.main.add(timer, forMode: .common)
@@ -72,7 +100,7 @@ struct ShortcutRecorder: NSViewRepresentable {
         view.value = shortcut
         view.didRecord = { shortcut = $0 }
         view.recordingChanged = onRecording
-        if !view.capturing { view.title = shortcut?.display ?? "录入"; view.needsDisplay = true }
+        if !view.capturing { view.title = shortcut?.display ?? L10n.text("录入"); view.needsDisplay = true }
     }
     static func dismantleNSView(_ view: RecorderButton, coordinator: ()) { view.stop() }
 }
@@ -90,8 +118,8 @@ final class RecorderButton: NSButton {
         isBordered = false; focusRingType = .none
         font = .monospacedSystemFont(ofSize: 12, weight: .medium)
         target = self; action = #selector(beginRecording)
-        toolTip = "点击后按下新的快捷键；Esc 取消"
-        setAccessibilityLabel("录入快捷键")
+        toolTip = L10n.text("点击后按下新的快捷键；Esc 取消")
+        setAccessibilityLabel(L10n.text("录入快捷键"))
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -107,7 +135,7 @@ final class RecorderButton: NSButton {
         color.withAlphaComponent(capturing ? 0.92 : 0.40).setStroke(); box.lineWidth = 1; box.stroke()
         let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center; paragraph.lineBreakMode = .byTruncatingTail
         let attributes: [NSAttributedString.Key: Any] = [.font: font ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: capturing ? Ink.nsDanger : NSColor(srgbRed: 0.655, green: 0.765, blue: 1, alpha: 1), .paragraphStyle: paragraph]
+            .foregroundColor: capturing ? Ink.nsDanger : Ink.nsAccentText, .paragraphStyle: paragraph]
         let height = (title as NSString).size(withAttributes: attributes).height
         (title as NSString).draw(in: NSRect(x: 6, y: bounds.midY - height / 2, width: bounds.width - 12, height: height), withAttributes: attributes)
         if window?.firstResponder === self && window?.isKeyWindow == true {
@@ -118,7 +146,7 @@ final class RecorderButton: NSButton {
     @objc private func beginRecording() {
         if capturing { stop(); return }
         diagnostics.record("shortcut.capture_started")
-        capturing = true; title = "请按键"; setAccessibilityLabel("正在录入快捷键，按 Esc 取消"); needsDisplay = true; recordingChanged?(true)
+        capturing = true; title = L10n.text("请按键"); setAccessibilityLabel(L10n.text("正在录入快捷键，按 Esc 取消")); needsDisplay = true; recordingChanged?(true)
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
             guard let self, self.capturing else { return event }
             if event.type == .keyDown {
@@ -137,8 +165,8 @@ final class RecorderButton: NSButton {
     func stop() {
         if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }; resignObserver = nil
-        let wasCapturing = capturing; capturing = false; title = value?.display ?? "录入"; needsDisplay = true
-        if wasCapturing { setAccessibilityLabel("录入快捷键"); recordingChanged?(false) }
+        let wasCapturing = capturing; capturing = false; title = value?.display ?? L10n.text("录入"); needsDisplay = true
+        if wasCapturing { setAccessibilityLabel(L10n.text("录入快捷键")); recordingChanged?(false) }
     }
     deinit {
         if let monitor { NSEvent.removeMonitor(monitor) }
@@ -172,7 +200,7 @@ final class StrokeCanvasView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override init(frame: NSRect) {
         super.init(frame: frame); setAccessibilityElement(true)
-        setAccessibilityLabel("手势录制区域。按住鼠标绘制轨迹。")
+        setAccessibilityLabel(L10n.text("手势录制区域。按住鼠标绘制轨迹。"))
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     private func point(_ event: NSEvent) -> StrokePoint {

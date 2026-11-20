@@ -7,11 +7,11 @@ public struct BABImportResult {
 
 public enum BABImport {
     public static func read(_ data: Data) throws -> BABImportResult {
-        guard data.count <= 4_000_000 else { throw ConfigError.invalid("预设文件超过 4 MB。") }
+        guard data.count <= 4_000_000 else { throw ConfigError.invalid(L10n.text("预设文件超过 4 MB。")) }
         let allowed: [AnyClass] = [NSDictionary.self, NSMutableDictionary.self, NSArray.self, NSMutableArray.self,
                                   NSString.self, NSNumber.self, NSDate.self, NSData.self]
         guard let root = try NSKeyedUnarchiver.unarchivedObject(ofClasses: allowed, from: data) as? [String: Any] else {
-            throw ConfigError.invalid("不是支持的 BetterAndBetter 预设。")
+            throw ConfigError.invalid(L10n.text("不是支持的 BetterAndBetter 预设。"))
         }
         var rules: [Rule] = []
         var warnings: [String] = []
@@ -23,7 +23,7 @@ public enum BABImport {
                 let scope = app == "All Applications" ? "" : app
                 for raw in group["All Rules"] as? [[String: Any]] ?? [] {
                     visited += 1
-                    guard visited <= 500 else { throw ConfigError.invalid("预设规则超过 500 条。") }
+                    guard visited <= 500 else { throw ConfigError.invalid(L10n.text("预设规则超过 500 条。")) }
                     var rule = Rule(bundleID: scope)
                     rule.enabled = String(describing: raw["Enable"] ?? "0") == "1"
                     if groupKey == "ruleOfKeyboard", let g = raw["Gesture"] as? [String: Any],
@@ -64,12 +64,12 @@ public enum BABImport {
                 }
             }
         }
-        guard !rules.isEmpty else { throw ConfigError.invalid("预设中没有支持的键盘或普通鼠标规则。") }
+        guard !rules.isEmpty else { throw ConfigError.invalid(L10n.text("预设中没有支持的键盘或普通鼠标规则。")) }
         for key in ["ruleOfMagicMouse", "ruleOfTrackPad", "ruleOfHotCorners"] {
             let count = (root[key] as? [[String: Any]] ?? []).reduce(0) { $0 + (($1["All Rules"] as? [Any])?.count ?? 0) }
-            if count > 0 { warnings.append("\(key) 中的 \(count) 条规则未导入，当前仅支持键盘和普通鼠标。") }
+            if count > 0 { warnings.append(L10n.text("%1$@ 中的 %2$@ 条规则未导入，当前仅支持键盘和普通鼠标。", "\(key)", "\(count)")) }
         }
-        if skipped > 0 { warnings.append("已跳过 \(skipped) 条不支持的规则。") }
+        if skipped > 0 { warnings.append(L10n.text("已跳过 %1$@ 条不支持的规则。", "\(skipped)")) }
         var config = Configuration(rules: rules)
         config.showTrail = root["displayTrackOfDrawing"] as? Bool ?? true
         try config.validate()
