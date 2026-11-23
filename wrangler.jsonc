@@ -1,0 +1,7 @@
+{
+  // Cloudflare Pages project for the landing page served at gesturekeys.pages.dev.
+  // The site is static: no build command, output is the committed site/ folder.
+  "name": "gesturekeys",
+  "compatibility_date": "2026-11-20",
+  "pages_build_output_dir": "./site"
+}
