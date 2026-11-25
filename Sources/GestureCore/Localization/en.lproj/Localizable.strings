@@ -135,7 +135,7 @@
 "第 %1$@ 键" = "Button %1$@";
 "粘贴" = "Paste";
 "系统未能注册：%1$@" = "macOS could not register: %1$@";
-"无法启用 ⌃1。它可能已被 macOS 用于「切换到桌面 1」（系统设置 → 键盘 → 键盘快捷键 → 调度中心）。" = "Could not enable ⌃1. macOS may use it for ‘Switch to Desktop 1’ (System Settings → Keyboard → Keyboard Shortcuts → Mission Control).";
+"无法启用 %1$@。它可能已被 macOS 用于「切换到桌面 1」（系统设置 → 键盘 → 键盘快捷键 → 调度中心）。" = "Could not enable %1$@. macOS may use it for ‘Switch to Desktop 1’ (System Settings → Keyboard → Keyboard Shortcuts → Mission Control).";
 "绑定右键单击会替代普通右键菜单。" = "Binding a right-click replaces the usual context menu.";
 "编辑" = "Edit";
 "编辑规则" = "Edit Rule";
@@ -198,7 +198,7 @@
 "配置" = "Configuration";
 "配置中包含无效轨迹或修饰键。" = "The configuration contains an invalid gesture or modifier.";
 "配置保存失败：%1$@" = "Could not save the configuration: %1$@";
-"配置文件超过 4 MB。" = "The configuration file is larger than 4 MB.";
+"配置文件超过 %1$@ MB。" = "The configuration file is larger than %1$@ MB.";
 "配置版本不支持、规则过多或 ID 重复。" = "Unsupported configuration version, too many rules, or duplicate IDs.";
 "重做" = "Redo";
 "重新打开关闭的标签页" = "Reopen Closed Tab";

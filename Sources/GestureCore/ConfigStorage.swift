@@ -28,10 +28,48 @@ public struct ConfigStorage {
         guard fm.fileExists(atPath: legacyPrevious.path) else { return }
         try fm.moveItem(at: legacyPrevious, to: backupURL(for: Self.modifiedAt(legacyPrevious) ?? Date()))
     }
+    // A native configuration can hold 500 × 4,096 points, unlike a small BAB archive.
+    // Use one byte budget for native persistence, export and import, including pretty-print overhead.
+    private static let nativeByteLimit = 256_000_000
+    private static var nativeSizeError: ConfigError { .invalid(L10n.text("配置文件超过 %1$@ MB。", "\(nativeByteLimit / 1_000_000)")) }
+
+    static func readBounded(_ url: URL, limit: Int, oversize: @autoclosure () -> ConfigError) throws -> Data {
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        let size = try file.seekToEnd()
+        guard size <= UInt64(limit) else { throw oversize() }
+        try file.seek(toOffset: 0)
+        var data = Data(capacity: Int(size))
+        while let chunk = try file.read(upToCount: min(1_048_576, limit - data.count + 1)), !chunk.isEmpty {
+            guard data.count + chunk.count <= limit else { throw oversize() }
+            data.append(chunk)
+        }
+        return data
+    }
+    public static func importFile(at url: URL) throws -> (Configuration, [String]) {
+        if url.pathExtension.lowercased() == "babpreset" {
+            let imported = try BABImport.read(from: url)
+            return (imported.configuration, imported.warnings)
+        }
+        let data = try readBounded(url, limit: nativeByteLimit, oversize: nativeSizeError)
+        var config = try JSONDecoder().decode(Configuration.self, from: data)
+        try config.validate()
+        let oldCount = config.rules.count
+        config.removeLegacyPlaceholders()
+        let skipped = oldCount - config.rules.count
+        return (config, skipped == 0 ? [] : [L10n.text("已跳过 %1$@ 条旧版占位规则。", "\(skipped)")])
+    }
+    public static func export(_ configuration: Configuration, to url: URL) throws {
+        var copy = configuration
+        copy.rules = copy.rules.map(\.withoutUnusedActionFields)
+        try writePrivate(encode(copy), to: url)
+    }
     public static func encode(_ configuration: Configuration) throws -> Data {
         try configuration.validate()
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try encoder.encode(configuration)
+        let data = try encoder.encode(configuration)
+        guard data.count <= nativeByteLimit else { throw nativeSizeError }
+        return data
     }
     public func save(_ configuration: Configuration) throws {
         let data = try Self.encode(configuration)

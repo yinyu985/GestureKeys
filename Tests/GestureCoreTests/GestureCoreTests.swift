@@ -1,4 +1,5 @@
 import Foundation
+import Carbon
 import GestureCore
 
 // Standalone assertion helpers: this machine has Command Line Tools, not XCTest.
@@ -20,7 +21,7 @@ private struct XCTSkip: Error { let message: String; init(_ message: String) { s
 
 @main
 struct CoreChecks {
-    static func main() throws {
+    @MainActor static func main() throws {
         let suite = GestureCoreTests()
         let checks: [(String, () throws -> Void)] = [
             ("modifier normalization", suite.testModifiersDropDeviceBits),
@@ -39,6 +40,7 @@ struct CoreChecks {
             ("config round trip", suite.testConfigurationRoundTripAndDuplicateIDs),
             ("click/drag and timeout", suite.testStrokeDistinguishesClickAndDragAndBoundsDuration),
             ("BAB importer skips unsupported rules", suite.testBABImportKnownKeyboardAndUnknownShape),
+            ("default right-click stays native; upward gesture opens Mission Control", suite.testDefaultMissionControl),
             ("legacy placeholder migration", suite.testLegacyMigration),
             ("dated rollover backup", suite.testBackup),
             ("diagnostic log rotation and JSON lines", suite.testDiagnostics),
@@ -51,6 +53,11 @@ struct CoreChecks {
             ("rule library order", suite.testLibraryOrder),
             ("blank rules and preset coverage", suite.testBlankRulesAndActions),
             ("opening links, files and folders", suite.testOpenLocations),
+            ("scoped freehand overrides, same-scope ambiguity", suite.testFreehandOverride),
+            ("scoped hotkey failure lifetime", suite.testHotKeyFailures),
+            ("German and US physical key labels", suite.testLayoutLabels),
+            ("export discards inactive targets only", suite.testExportTargets),
+            ("large native export restores; foreign limits remain", suite.testLargeExport),
             ("actual user export", suite.testActualUserExportWhenSupplied)
         ]
         var passed = 0
@@ -79,6 +86,23 @@ final class GestureCoreTests {
     func testModifiersDropDeviceBits() {
         XCTAssertEqual(Shortcut(18, 270592), Shortcut(18, 0x40000))
         XCTAssertEqual(Shortcut(18, 270592).display, "⌃1")
+    }
+    @MainActor func testLayoutLabels() throws {
+        // Read installed layouts (including disabled ones); never select an input source.
+        func layout(_ name: String) throws -> TISInputSource {
+            let filter = [kTISPropertyInputSourceID as String: "com.apple.keylayout.\(name)"] as CFDictionary
+            let sources = TISCreateInputSourceList(filter, true)?.takeRetainedValue() as? [TISInputSource]
+            guard let source = sources?.first else { throw XCTSkip("Layout not installed: \(name)") }
+            return source
+        }
+        let keys = [Shortcut(6, 0x100000), Shortcut(16, 0x100000)]
+        defer { KeyboardLayoutLabels.refresh() }
+        KeyboardLayoutLabels.refresh(from: try layout("German"))
+        XCTAssertEqual(keys.map(\.display), ["⌘Y", "⌘Z"])
+        XCTAssertEqual(Shortcut(123, 0x40000).display, "⌃←")
+        KeyboardLayoutLabels.refresh(from: try layout("US"))
+        XCTAssertEqual(keys.map(\.display), ["⌘Z", "⌘Y"])
+        XCTAssertEqual(keys.map(\.keyCode), [6, 16])
     }
     func testPlainTypingCannotBeRegistered() {
         XCTAssertNotNil(Rule(key: Shortcut(0)).validationError)
@@ -147,6 +171,45 @@ final class GestureCoreTests {
         XCTAssertEqual(RuleResolver.scoped([global,block], bundleID: "com.apple.finder").map(\.id), [block.id])
         XCTAssertEqual(RuleResolver.scoped([global,block], bundleID: "com.apple.Safari").map(\.id), [global.id])
     }
+    func testFreehandOverride() {
+        let up = Shape.preset(.up), freehand = [StrokePoint(35,105), StrokePoint(36,70), StrokePoint(35,20)]
+        let global = Rule(kind: .gesture, points: up, shapeName: "↑", action: .missionControl)
+        var local = Rule(kind: .gesture, points: freehand, action: .copy, bundleID: "com.apple.Safari")
+        func match(_ points: [StrokePoint], _ rules: [Rule], in app: String) -> Shape.Match {
+            Shape.recognize(points, rules: RuleResolver.scoped(rules, bundleID: app))
+        }
+        for preset in [false, true] {
+            if preset { local.points = up; local.shapeName = "↑" }
+            for drawn in [up, freehand] {
+                guard case .matched(let a, _) = match(drawn, [global, local], in: local.bundleID),
+                      case .matched(let b, _) = match(drawn, [global, local], in: "com.apple.finder") else { XCTFail("Missing override") }
+                XCTAssertEqual(a, local.id); XCTAssertEqual(b, global.id)
+            }
+        }
+        var other = local; other.id = UUID(); other.points = freehand; other.shapeName = ""
+        XCTAssertEqual(match(freehand, [local, other, global], in: local.bundleID), .ambiguous)
+        // Midway between two *distinct* directions is not a reason to pick the scoped rule.
+        other.points = [StrokePoint(0,100), StrokePoint(30,0)]
+        XCTAssertEqual(match([StrokePoint(0,100), StrokePoint(15,0)], [global, other], in: local.bundleID), .ambiguous)
+    }
+    func testHotKeyFailures() {
+        let safari = "com.apple.Safari", one = Shortcut(18, 0x40000), two = Shortcut(19, 0x40000)
+        let a = Rule(key: one, action: .copy, bundleID: safari), b = Rule(key: two, action: .paste, bundleID: safari)
+        let finder = Rule(key: two, action: .copy, bundleID: "com.apple.finder"), rules = [a,b,finder]
+        var failures = HotKeyFailures()
+        failures.update(rules: rules, attempted: [a,b], rejected: [one,two])
+        failures.update(rules: rules, attempted: [], rejected: [])  // return to settings
+        failures.update(rules: rules, attempted: [finder], rejected: [])
+        XCTAssertEqual(failures.shortcuts, [one,two])
+        failures.update(rules: rules, attempted: [a,b], rejected: [two])  // real retry of a
+        XCTAssertEqual(failures.shortcuts, [two])
+        var disabled = b; disabled.enabled = false
+        failures.update(rules: [a,disabled,finder], attempted: [], rejected: [])
+        XCTAssertTrue(failures.shortcuts.isEmpty)
+        failures.update(rules: rules, attempted: [b], rejected: [two])
+        failures.update(rules: [a,finder], attempted: [], rejected: [])  // deleted
+        XCTAssertTrue(failures.shortcuts.isEmpty)
+    }
     func testDisabledAndReviewRulesExcluded() {
         var rule = Rule(key: Shortcut(18,0x40000), action: .pageBack); rule.needsReview = true
         XCTAssertTrue(RuleResolver.scoped([rule], bundleID: "app").isEmpty)
@@ -169,8 +232,10 @@ final class GestureCoreTests {
     }
     func testStrokeDistinguishesClickAndDragAndBoundsDuration() {
         var session = StrokeSession(start: StrokePoint(0,0), time: 0)
+        for i in 0..<8 { XCTAssertTrue(session.append(StrokePoint(i.isMultiple(of: 2) ? 1 : -1, 0), time: 0.01 * Double(i))) }
         XCTAssertTrue(session.append(StrokePoint(2,0), time: 0.1)); XCTAssertFalse(session.isDrag)
         XCTAssertTrue(session.append(StrokePoint(40,0), time: 0.2)); XCTAssertTrue(session.isDrag)
+        XCTAssertTrue(session.append(StrokePoint(0,0), time: 0.3)); XCTAssertTrue(session.isDrag)
         XCTAssertFalse(session.append(StrokePoint(80,0), time: 11))
     }
     func testBABImportKnownKeyboardAndUnknownShape() throws {
@@ -184,18 +249,33 @@ final class GestureCoreTests {
         XCTAssertEqual(result.configuration.rules.count, 1)
         XCTAssertEqual(result.configuration.rules[0].triggerKey, Shortcut(18, 0x40000))
         XCTAssertEqual(result.configuration.rules[0].action, .pageBack)
-        XCTAssertEqual(result.warnings.count, 1)
+        XCTAssertEqual(result.warnings, [L10n.text("已跳过 %1$@ 条不支持的规则。", "1")])
+    }
+    func testDefaultMissionControl() {
+        let rules = RuleResolver.scoped(Configuration.defaults.rules, bundleID: "com.apple.finder").filter { $0.mouseButton == 1 }
+        XCTAssertFalse(rules.contains { $0.kind == .click })
+        guard case .matched(let id, _) = Shape.recognize([StrokePoint(20, 90), StrokePoint(20, 10)], rules: rules.filter { $0.kind == .gesture }) else { XCTFail("Upward gesture did not match") }
+        XCTAssertEqual(rules.first { $0.id == id }?.action, .missionControl)
+        let custom = Rule(kind: .gesture, points: Shape.preset(.up), action: .copy)
+        var config = Configuration(rules: [custom]); config.addDefaultMissionControlGestureIfMissing()
+        XCTAssertEqual(config.rules, [custom])
+        var freehand = custom; freehand.points = [StrokePoint(35,105), StrokePoint(36,70), StrokePoint(35,20)]
+        config = Configuration(rules: [freehand]); config.addDefaultMissionControlGestureIfMissing()
+        XCTAssertEqual(config.rules, [freehand])  // migration must not make a user's own global ↑ ambiguous
+        var full = Configuration(rules: (0..<Configuration.maxRules).map { Rule(name: "Rule \($0)", enabled: false) })
+        full.addDefaultMissionControlGestureIfMissing(); XCTAssertEqual(full.rules.count, Configuration.maxRules)
     }
     func testLegacyMigration() {
         let kept = Rule(name: "User rule", enabled: false)
         let placeholder = Rule(name: "Old placeholder", kind: .gesture, enabled: false, needsReview: true)
         var config = Configuration(rules: [kept, placeholder])
         config.removeLegacyPlaceholders()
-        config.addDefaultRightClickIfMissing()
-        config.addDefaultRightClickIfMissing()
+        config.addDefaultMissionControlGestureIfMissing()
+        config.addDefaultMissionControlGestureIfMissing()
         XCTAssertEqual(config.rules.count, 2)
         XCTAssertEqual(config.rules[0], kept)
-        XCTAssertEqual(config.rules[1].kind, .click)
+        XCTAssertEqual(config.rules[1].kind, .gesture)
+        XCTAssertEqual(config.rules[1].points, Shape.preset(.up))
         XCTAssertEqual(config.rules[1].mouseButton, 1)
         XCTAssertEqual(config.rules[1].action, .missionControl)
         XCTAssertTrue(config.rules[1].enabled)
@@ -393,19 +473,52 @@ final class GestureCoreTests {
         let config = Configuration(rules: [link, item, app])
         XCTAssertEqual(try JSONDecoder().decode(Configuration.self, from: ConfigStorage.encode(config)), config)
     }
+    func testExportTargets() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var rule = Rule(name: "Keep my name", kind: .click, output: Shortcut(18,0x40000), note: "Keep my note")
+        rule.linkAddress = "https://example.invalid/?token=test-private"; rule.appPath = "/Test.app"; rule.fileOrFolderPath = "/tmp/test-path"
+        for action in [ActionKind.copy, .openLink, .openApplication, .openFileOrFolder, .shortcut] {
+            rule.action = action
+            try ConfigStorage.export(Configuration(rules: [rule]), to: url)
+            let (restored, warnings) = try ConfigStorage.importFile(at: url)
+            XCTAssertTrue(warnings.isEmpty)
+            let saved = restored.rules[0]
+            XCTAssertEqual(saved.linkAddress, action == .openLink ? rule.linkAddress : nil)
+            XCTAssertEqual(saved.fileOrFolderPath, action == .openFileOrFolder ? rule.fileOrFolderPath : nil)
+            XCTAssertEqual(saved.appPath, action == .openApplication ? rule.appPath : "")
+            XCTAssertEqual(saved.outputKey, action == .shortcut ? rule.outputKey : nil)
+            XCTAssertEqual(saved.id, rule.id); XCTAssertEqual(saved.name, rule.name); XCTAssertEqual(saved.note, rule.note)
+            XCTAssertEqual(try String(contentsOf: url, encoding: .utf8).contains("test-private"), action == .openLink)
+        }
+    }
+    func testLargeExport() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let json = folder.appendingPathComponent("rules.json"), bab = folder.appendingPathComponent("rules.BABPreset")
+        let points = (0..<1_500).map { StrokePoint(42, Double($0) / 8) }
+        let config = Configuration(rules: (0..<60).map { Rule(kind: .gesture, points: points, action: .copy, bundleID: "test.app\($0)") })
+        try ConfigStorage.export(config, to: json)
+        let bytes = try json.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        XCTAssertTrue(bytes > 4_000_000)
+        let (restored, warnings) = try ConfigStorage.importFile(at: json)
+        XCTAssertTrue(restored == config && warnings.isEmpty)
+        // Sparse files: verify both size guards without allocating giant archives or decoding them.
+        for (url, size, message) in [(bab, 4_000_001, L10n.text("预设文件超过 4 MB。")),
+                                     (json, 256_000_001, L10n.text("配置文件超过 %1$@ MB。", "256"))] {
+            try Data().write(to: url)
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: UInt64(size)); try handle.close()
+            do { _ = try ConfigStorage.importFile(at: url); XCTFail("Oversize import succeeded") }
+            catch let error as ConfigError { XCTAssertEqual(error.localizedDescription, message) }
+        }
+    }
     func testActualUserExportWhenSupplied() throws {
         guard let path = ProcessInfo.processInfo.environment["BAB_INPUT"] else { throw XCTSkip("No local export supplied") }
-        let result = try BABImport.read(Data(contentsOf: URL(fileURLWithPath: path)))
-        XCTAssertEqual(result.configuration.rules.count, 11)
-        XCTAssertEqual(result.configuration.rules.filter { $0.kind == .keyboard }.count, 4)
-        XCTAssertEqual(result.configuration.rules.filter(\.needsReview).count, 0)
-        XCTAssertTrue(result.warnings.contains(L10n.text("已跳过 %1$@ 条不支持的规则。", "5")))
-        XCTAssertTrue(RuleResolver.conflicts(result.configuration.rules).isEmpty)
-        if let output = ProcessInfo.processInfo.environment["GK_SEED_OUTPUT"] {
-            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            var seed = result.configuration
-            seed.addDefaultRightClickIfMissing()
-            try encoder.encode(seed).write(to: URL(fileURLWithPath: output), options: .atomic)
-        }
+        let result = try BABImport.read(from: URL(fileURLWithPath: path))
+        XCTAssertFalse(result.configuration.rules.isEmpty)
+        XCTAssertTrue(result.configuration.rules.allSatisfy { $0.validationError == nil })
+        XCTAssertEqual(try JSONDecoder().decode(Configuration.self, from: ConfigStorage.encode(result.configuration)), result.configuration)
     }
 }

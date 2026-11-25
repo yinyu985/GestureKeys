@@ -29,13 +29,8 @@ elif [[ "$mode" == self-signed ]]; then
   [[ "$GESTUREKEYS_SIGN_PEM" = /* && -r "$GESTUREKEYS_SIGN_PEM" ]] || { echo 'Signing PEM must be a readable absolute path.' >&2; exit 1; }
   /usr/bin/openssl x509 -in "$GESTUREKEYS_SIGN_PEM" -checkend 0 -noout
 fi
-mkdir -p Resources
 
-if [[ $# -gt 0 ]]; then
-  BAB_INPUT="$1" GK_SEED_OUTPUT="$PWD/Resources/InitialRules.json" swift run GestureCoreChecks
-else
-  swift run GestureCoreChecks
-fi
+swift run GestureCoreChecks
 swift build -c release --product GestureKeys
 BIN="$(swift build -c release --show-bin-path)"
 APP="$PWD/.build/bundle/GestureKeys.app"
@@ -53,8 +48,8 @@ with open(sys.argv[1], 'wb') as f:
         'CFBundleName': 'GestureKeys',
         'CFBundleDisplayName': 'GestureKeys',
         'CFBundlePackageType': 'APPL',
-        'CFBundleShortVersionString': '0.7.3',
-        'CFBundleVersion': '20',
+        'CFBundleShortVersionString': '0.7.4',
+        'CFBundleVersion': '21',
         'CFBundleDevelopmentRegion': 'zh-Hans',
         'CFBundleIconFile': 'GestureKeys-B2.icns',
         'LSMinimumSystemVersion': '13.0',
@@ -64,7 +59,7 @@ with open(sys.argv[1], 'wb') as f:
     }, f)
 PY
 if [[ $# -gt 0 ]]; then
-  cp Resources/InitialRules.json "$APP/Contents/Resources/InitialRules.json"
+  swift run GestureSeed "$1" "$APP/Contents/Resources/InitialRules.json"
 fi
 ditto "$BIN/GestureKeys_GestureCore.bundle" "$APP/Contents/Resources/GestureKeys_GestureCore.bundle"
 for language in en zh-Hans; do

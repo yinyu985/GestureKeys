@@ -81,7 +81,8 @@ final class AppModel: ObservableObject {
     private var sheetObservers: [NSObjectProtocol] = []
     private let engine = EventEngine()
     private let hotKeys = GlobalHotKeys()
-    private static let desktopOneShortcut = Shortcut(UInt16(kVK_ANSI_1), CGEventFlags.maskControl.rawValue)
+    private var hotKeyFailures = HotKeyFailures()
+    static let desktopOneShortcut = Shortcut(UInt16(kVK_ANSI_1), CGEventFlags.maskControl.rawValue)
     @Published private(set) var desktopOneUnavailable = false
     @Published private(set) var unavailableShortcuts: [Shortcut] = []
     @Published private(set) var configurationSavedAt: Date?
@@ -90,6 +91,7 @@ final class AppModel: ObservableObject {
     private let trail = TrailOverlay()
     private let nameHUD = RuleNameHUD()
     private var workspaceObserver: NSObjectProtocol?
+    private var layoutObserver: NSObjectProtocol?
     private var permissionTimer: Timer?
     private var pendingSave: DispatchWorkItem?
     private var initialized = false
@@ -109,6 +111,12 @@ final class AppModel: ObservableObject {
             ? URL(fileURLWithPath: "/tmp/GestureKeys-smoke-\(ProcessInfo.processInfo.processIdentifier)")
             : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         storageURL = base.appendingPathComponent("GestureKeys", isDirectory: true).appendingPathComponent("config.json")
+        layoutObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil, queue: .main
+        ) { [weak self] _ in MainActor.assumeIsolated {
+            if KeyboardLayoutLabels.refresh() { self?.objectWillChange.send() }
+        } }
+        KeyboardLayoutLabels.refresh()
         var needsMigration = false
         do {
             if FileManager.default.fileExists(atPath: storageURL.path) {
@@ -118,7 +126,7 @@ final class AppModel: ObservableObject {
                 if config.rules.contains(where: \.needsReview) {
                     needsMigration = true
                     config.removeLegacyPlaceholders()
-                    config.addDefaultRightClickIfMissing()
+                    config.addDefaultMissionControlGestureIfMissing()
                 }
                 configuration = config
             } else if let seed = Bundle.main.url(forResource: "InitialRules", withExtension: "json") {
@@ -210,24 +218,14 @@ final class AppModel: ObservableObject {
         if context != loggedContext { loggedContext = context; diagnostics.record("input.context", context) }
         engine.update(configuration, frontmost: foreground, suspended: suspended, pid: pid)
         let desktopOne = Self.desktopOneShortcut
-        // Keep the last failure visible when leaving a scoped app to open GestureKeys.
-        if desktopOneUnavailable && (!running || !configuration.rules.contains(where: {
-            $0.kind == .keyboard && $0.enabled && $0.triggerKey == desktopOne && $0.validationError == nil
-        })) {
-            desktopOneUnavailable = false
-        }
-        if running && !suspended {
-            let wanted = Set(RuleResolver.scoped(configuration.rules, bundleID: foreground).filter { $0.kind == .keyboard }.compactMap(\.triggerKey))
-            let failed = hotKeys.replace(with: wanted)
-            if wanted.contains(desktopOne) {
-                let unavailable = failed.contains(desktopOne)
-                if desktopOneUnavailable != unavailable { desktopOneUnavailable = unavailable }
-            }
-            let otherFailures = failed.filter { $0 != desktopOne }
-            if otherFailures != unavailableShortcuts { unavailableShortcuts = otherFailures }
-        } else {
-            _ = hotKeys.replace(with: [])
-        }
+        let attempted = running && !suspended ? RuleResolver.scoped(configuration.rules, bundleID: foreground).filter { $0.kind == .keyboard } : []
+        let rejected = hotKeys.replace(with: Set(attempted.compactMap(\.triggerKey)))
+        if running { hotKeyFailures.update(rules: configuration.rules, attempted: attempted, rejected: Set(rejected)) }
+        else { hotKeyFailures = HotKeyFailures() }
+        let failures = hotKeyFailures.shortcuts
+        if desktopOneUnavailable != failures.contains(desktopOne) { desktopOneUnavailable = failures.contains(desktopOne) }
+        let others = failures.subtracting([desktopOne]).sorted { $0.display < $1.display }
+        if unavailableShortcuts != others { unavailableShortcuts = others }
     }
     func refreshPermissions() {
         let accessibility = AXIsProcessTrusted(), input = CGPreflightListenEventAccess()
@@ -290,7 +288,6 @@ final class AppModel: ObservableObject {
             if monitorState == .running || monitorState == .starting {
                 monitorState = .stopping; engine.stop()
             }
-            if !unavailableShortcuts.isEmpty { unavailableShortcuts = [] }
         } else if monitorState == .idle {
             monitorState = .starting
             syncEngine(); engine.start(); return
@@ -323,7 +320,8 @@ final class AppModel: ObservableObject {
         diagnostics.record("rule.duplicate_opened", diagnosticRule(rule).merging(["source_rule": original.id.uuidString]) { _, new in new })
         editor = RuleDraft(rule: rule, isNew: true)
     }
-    func commit(_ rule: Rule, isNew: Bool, operation: String? = nil) -> String? {
+    func commit(_ draft: Rule, isNew: Bool, operation: String? = nil) -> String? {
+        let rule = draft.withoutUnusedActionFields
         let facts = diagnosticRule(rule)
         if let error = rule.validationError { diagnostics.record("rule.validation_failed", facts.merging(["reason": error]) { _, new in new }); return error }
         var updated = configuration
@@ -419,16 +417,7 @@ final class AppModel: ObservableObject {
             guard let self else { return }; self.filePanelOpen = false
             guard response == .OK, let url = panel.url else { diagnostics.record("config.import_cancelled"); return }
             do {
-                let data = try Data(contentsOf: url)
-                guard data.count <= 4_000_000 else { throw ConfigError.invalid(L10n.text("配置文件超过 4 MB。")) }
-                var config: Configuration; var warnings: [String] = []
-                if url.pathExtension.lowercased() == "babpreset" {
-                    let imported = try BABImport.read(data); config = imported.configuration; warnings = imported.warnings
-                } else {
-                    config = try JSONDecoder().decode(Configuration.self, from: data); try config.validate()
-                    let oldCount = config.rules.count; config.removeLegacyPlaceholders()
-                    if oldCount != config.rules.count { warnings = [L10n.text("已跳过 %1$@ 条旧版占位规则。", "\(oldCount - config.rules.count)")] }
-                }
+                let (config, warnings) = try ConfigStorage.importFile(at: url)
                 self.prompt = AppPrompt(title: L10n.text("替换当前配置？"), detail: L10n.text("导入 %1$@ 条规则。当前配置会保留为上一版，新规则将自动生效。", "\(config.rules.count)"), confirmTitle: L10n.text("导入并替换")) { [weak self] in
                     guard let self else { return }
                     do {
@@ -449,8 +438,8 @@ final class AppModel: ObservableObject {
         panel.begin { [weak self] response in
             guard let self else { return }; self.filePanelOpen = false
             guard response == .OK, let url = panel.url else { diagnostics.record("config.export_cancelled"); return }
-            do { let data = try ConfigStorage.encode(self.configuration); try data.write(to: url, options: .atomic)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            do {
+                try ConfigStorage.export(self.configuration, to: url)
                 diagnostics.record("config.exported", ["rules": String(self.configuration.rules.count)])
             } catch { diagnostics.record("config.export_failed", diagnosticError(error)); self.message = L10n.text("导出失败：%1$@", "\(error.localizedDescription)") }
         }
@@ -475,6 +464,7 @@ final class AppModel: ObservableObject {
         permissionTimer?.invalidate()
         sheetObservers.forEach(NotificationCenter.default.removeObserver)
         if let workspaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver) }
+        if let layoutObserver { DistributedNotificationCenter.default().removeObserver(layoutObserver) }
         engine.onStatus = nil
         pendingSave?.cancel(); saveNow(); _ = hotKeys.replace(with: []); engine.stop(); trail.update(nil)
         diagnostics.record("app.exiting"); diagnostics.flush()
@@ -484,7 +474,8 @@ final class AppModel: ObservableObject {
         let key = Shortcut(23, 0x40000)
         var rule = Rule(name: "Open test", key: key, action: .openApplication)
         rule.appPath = "/nonexistent-gesturekeys-\(UUID().uuidString)/Test App.app"
-        engine.update(Configuration(rules: [rule]), frontmost: "test.browser", suspended: false)
+        let front = NSWorkspace.shared.frontmostApplication
+        engine.update(Configuration(rules: [rule]), frontmost: front?.bundleIdentifier ?? "", suspended: false, pid: front?.processIdentifier ?? 0)
         engine.press(key)
     }
 }

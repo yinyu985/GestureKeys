@@ -56,7 +56,7 @@ struct ContentView: View {
                 }
                 if let error = footerError { footer(error) }
                 if model.desktopOneUnavailable {
-                    footer(L10n.text("无法启用 ⌃1。它可能已被 macOS 用于「切换到桌面 1」（系统设置 → 键盘 → 键盘快捷键 → 调度中心）。"))
+                    footer(L10n.text("无法启用 %1$@。它可能已被 macOS 用于「切换到桌面 1」（系统设置 → 键盘 → 键盘快捷键 → 调度中心）。", AppModel.desktopOneShortcut.display))
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Ink.base)
         }

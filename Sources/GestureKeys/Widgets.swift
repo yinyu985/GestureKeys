@@ -94,18 +94,25 @@ final class EditorInputReadoutLabel: NSTextField {
 
 struct ShortcutRecorder: NSViewRepresentable {
     @Binding var shortcut: Shortcut?
-    var onRecording: (Bool) -> Void = { _ in }
+    private let label: String
+    let onRecording: (Bool) -> Void
+    init(shortcut: Binding<Shortcut?>, onRecording: @escaping (Bool) -> Void = { _ in }) {
+        _shortcut = shortcut; self.onRecording = onRecording
+        // A layout change can change the label without changing the bound physical key.
+        label = shortcut.wrappedValue?.display ?? L10n.text("录入")
+    }
     func makeNSView(context: Context) -> RecorderButton { RecorderButton() }
     func updateNSView(_ view: RecorderButton, context: Context) {
         view.value = shortcut
         view.didRecord = { shortcut = $0 }
         view.recordingChanged = onRecording
-        if !view.capturing { view.title = shortcut?.display ?? L10n.text("录入"); view.needsDisplay = true }
+        if !view.capturing { view.title = label; view.needsDisplay = true }
     }
     static func dismantleNSView(_ view: RecorderButton, coordinator: ()) { view.stop() }
 }
 
 final class RecorderButton: NSButton {
+    private static weak var activeRecorder: RecorderButton?
     var value: Shortcut?
     var didRecord: ((Shortcut) -> Void)?
     var recordingChanged: ((Bool) -> Void)?
@@ -145,10 +152,17 @@ final class RecorderButton: NSButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func beginRecording() {
         if capturing { stop(); return }
+        Self.activeRecorder?.stop()
+        Self.activeRecorder = self
         diagnostics.record("shortcut.capture_started")
         capturing = true; title = L10n.text("请按键"); setAccessibilityLabel(L10n.text("正在录入快捷键，按 Esc 取消")); needsDisplay = true; recordingChanged?(true)
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
             guard let self, self.capturing else { return event }
+            guard let window = self.window, event.window === window else { self.stop(); return event }
+            if event.type != .keyDown && event.type != .keyUp {
+                if !self.bounds.contains(self.convert(event.locationInWindow, from: nil)) { self.stop() }
+                return event
+            }
             if event.type == .keyDown {
                 let flags = event.modifierFlags.rawValue & UInt(Shortcut.mask)
                 if event.keyCode != 53 || flags != 0 {
@@ -165,6 +179,7 @@ final class RecorderButton: NSButton {
     func stop() {
         if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }; resignObserver = nil
+        if Self.activeRecorder === self { Self.activeRecorder = nil }
         let wasCapturing = capturing; capturing = false; title = value?.display ?? L10n.text("录入"); needsDisplay = true
         if wasCapturing { setAccessibilityLabel(L10n.text("录入快捷键")); recordingChanged?(false) }
     }

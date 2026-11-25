@@ -6,8 +6,13 @@ public struct BABImportResult {
 }
 
 public enum BABImport {
+    private static let byteLimit = 4_000_000
+    private static var sizeError: ConfigError { .invalid(L10n.text("预设文件超过 4 MB。")) }
+    public static func read(from url: URL) throws -> BABImportResult {
+        try read(ConfigStorage.readBounded(url, limit: byteLimit, oversize: sizeError))
+    }
     public static func read(_ data: Data) throws -> BABImportResult {
-        guard data.count <= 4_000_000 else { throw ConfigError.invalid(L10n.text("预设文件超过 4 MB。")) }
+        guard data.count <= byteLimit else { throw sizeError }
         let allowed: [AnyClass] = [NSDictionary.self, NSMutableDictionary.self, NSArray.self, NSMutableArray.self,
                                   NSString.self, NSNumber.self, NSDate.self, NSData.self]
         guard let root = try NSKeyedUnarchiver.unarchivedObject(ofClasses: allowed, from: data) as? [String: Any] else {
@@ -23,7 +28,7 @@ public enum BABImport {
                 let scope = app == "All Applications" ? "" : app
                 for raw in group["All Rules"] as? [[String: Any]] ?? [] {
                     visited += 1
-                    guard visited <= 500 else { throw ConfigError.invalid(L10n.text("预设规则超过 500 条。")) }
+                    guard visited <= Configuration.maxRules else { throw ConfigError.invalid(L10n.text("预设规则超过 500 条。")) }
                     var rule = Rule(bundleID: scope)
                     rule.enabled = String(describing: raw["Enable"] ?? "0") == "1"
                     if groupKey == "ruleOfKeyboard", let g = raw["Gesture"] as? [String: Any],

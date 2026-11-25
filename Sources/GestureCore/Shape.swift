@@ -122,6 +122,12 @@ public enum Shape {
         return position + direction * 0.12
     }
 
+    private static let ambiguityMargin = 0.035
+    static func equivalentTemplates(_ a: [StrokePoint], _ b: [StrokePoint]) -> Bool {
+        guard let lhs = normalize(a), let rhs = normalize(b) else { return false }
+        return distance(lhs, rhs) < ambiguityMargin
+    }
+
     public enum Match: Equatable {
         case matched(UUID, Double)
         case ambiguous
@@ -129,12 +135,21 @@ public enum Shape {
     }
     public static func recognize(_ points: [StrokePoint], rules: [Rule]) -> Match {
         guard let candidate = normalize(points) else { return .noMatch }
-        let ranked = rules.compactMap { rule -> (Rule, Double)? in
+        let ranked = rules.compactMap { rule -> (rule: Rule, template: [StrokePoint], score: Double)? in
             guard let template = normalize(rule.points) else { return nil }
-            return (rule, distance(candidate, template))
-        }.sorted { $0.1 < $1.1 }
-        guard let best = ranked.first, best.1 < 0.24 else { return .noMatch }
-        if ranked.count > 1 && ranked[1].1 - best.1 < 0.035 { return .ambiguous }
-        return .matched(best.0.id, best.1)
+            return (rule, template, distance(candidate, template))
+        }.sorted { $0.score < $1.score }
+        let cutoff = 0.24, margin = ambiguityMargin
+        guard let best = ranked.first, best.score < cutoff else { return .noMatch }
+        let tied = ranked.prefix { $0.score - best.score < margin }
+        if tied.count == 1 { return .matched(best.rule.id, best.score) }
+        // The same physical shape can be drawn at different positions and scales. A unique
+        // app-specific equivalent wins; never break a tie between different shapes or two local rules.
+        let local = tied.filter { !$0.rule.bundleID.isEmpty }
+        if local.count == 1, let winner = local.first, winner.score < cutoff,
+           tied.allSatisfy({ $0.rule.id == winner.rule.id || distance(winner.template, $0.template) < margin }) {
+            return .matched(winner.rule.id, winner.score)
+        }
+        return .ambiguous
     }
 }

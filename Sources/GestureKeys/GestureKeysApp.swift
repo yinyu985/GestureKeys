@@ -171,9 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             fputs("SMOKE FAIL: system shortcut event flags\n", stderr); exit(1)
         }
         print("PASS system arrow events include navigation flags without changing app-local shortcuts")
-        guard let button = descendants(view).compactMap({ $0 as? RecorderButton }).first else {
-            fputs("SMOKE FAIL: no shortcut recorder\n", stderr); exit(1)
-        }
+        let buttons = descendants(view).compactMap { $0 as? RecorderButton }
         let original = model.configuration
         let ownPID = ProcessInfo.processInfo.processIdentifier
         guard model.routingReason(pid: ownPID) == "none" else { fputs("SMOKE FAIL: own main window routing\n", stderr); exit(1) }
@@ -205,15 +203,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         model.setTriggerHint(initialHint, for: first.id)
         print("PASS trigger hint persists independently of rule enablement")
-        button.performClick(nil)
-        guard button.capturing, button.title == L10n.text("请按键") else { fputs("SMOKE FAIL: shortcut capture state\n", stderr); exit(1) }
-        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control], timestamp: 0,
-                  windowNumber: window.windowNumber, context: nil, characters: "5", charactersIgnoringModifiers: "5", isARepeat: false, keyCode: 23) else { exit(1) }
-        NSApp.sendEvent(event)
-        guard !button.capturing, model.configuration.rules[0].triggerKey == Shortcut(23, 0x40000) else {
-            fputs("SMOKE FAIL: shortcut recording\n", stderr); exit(1)
+        let rows = original.rules.filter { $0.kind == .keyboard }
+        guard rows.count >= 2, let a = buttons.first(where: { $0.value == rows[0].triggerKey }),
+              let b = buttons.first(where: { $0.value == rows[1].triggerKey }) else { fputs("SMOKE FAIL: no shortcut recorders\n", stderr); exit(1) }
+        a.performClick(nil); b.performClick(nil)
+        guard !a.capturing, b.capturing, model.recordingShortcut, b.title == L10n.text("请按键") else { fputs("SMOKE FAIL: shortcut capture ownership\n", stderr); exit(1) }
+        for (code, text) in [(UInt16(23), "5"), (22, "6")] {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: code)!
+            NSApp.sendEvent(event) // window-local only
         }
-        print("PASS local shortcut recorder")
+        var expected = original; expected.rules[expected.rules.firstIndex(where: { $0.id == rows[1].id })!].triggerKey = Shortcut(23, 0x40000)
+        guard !a.capturing, !b.capturing, !model.recordingShortcut, model.configuration == expected else {
+            fputs("SMOKE FAIL: second shortcut edited a different row\n", stderr); exit(1)
+        }
+        print("PASS only the last recorder accepts a key; the following key changes neither row")
         model.configuration = original
         let mode = ProcessInfo.processInfo.environment["GESTUREKEYS_SMOKE_TEST"] ?? "1"
         if let gesture = model.configuration.rules.first(where: { mode.contains("space-editor") ? $0.action == .previousDesktop : $0.kind == .gesture }) {

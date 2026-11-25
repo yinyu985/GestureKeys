@@ -9,6 +9,7 @@ let package = Package(
     targets: [
         .target(name: "GestureCore", resources: [.process("Localization")]),
         .executableTarget(name: "GestureKeys", dependencies: ["GestureCore"]),
+        .executableTarget(name: "GestureSeed", dependencies: ["GestureCore"]),
         .executableTarget(name: "GestureCoreChecks", dependencies: ["GestureCore"], path: "Tests/GestureCoreTests")
     ]
 )

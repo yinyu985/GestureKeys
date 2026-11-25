@@ -19,9 +19,9 @@ public struct Shortcut: Codable, Equatable, Hashable, Sendable {
         for (bit, symbol) in [(UInt64(0x40000), "⌃"), (0x80000, "⌥"), (0x20000, "⇧"), (0x100000, "⌘")] {
             if modifiers & bit != 0 { s += symbol }
         }
-        let names: [UInt16: String] = [0:"A",1:"S",2:"D",3:"F",4:"H",5:"G",6:"Z",7:"X",8:"C",9:"V",11:"B",12:"Q",13:"W",14:"E",15:"R",16:"Y",17:"T",18:"1",19:"2",20:"3",21:"4",22:"6",23:"5",24:"=",25:"9",26:"7",27:"−",28:"8",29:"0",30:"]",31:"O",32:"U",33:"[",34:"I",35:"P",36:"↩",37:"L",38:"J",39:"'",40:"K",41:";",42:"\\",43:",",44:"/",45:"N",46:"M",47:".",48:"Tab",49:"Space",50:"`",51:"⌫",53:"Esc",96:"F5",97:"F6",98:"F7",99:"F3",100:"F8",101:"F9",103:"F11",109:"F10",111:"F12",115:"Home",116:"Page Up",117:"⌦",118:"F4",119:"End",120:"F2",121:"Page Down",122:"F1",123:"←",124:"→",125:"↓",126:"↑"]
-        return s + (names[keyCode] ?? "Key \(keyCode)")
+        return s + (KeyboardLayoutLabels.label(for: keyCode) ?? Self.fallbackKeyNames[keyCode] ?? "Key \(keyCode)")
     }
+    private static let fallbackKeyNames: [UInt16: String] = [0:"A",1:"S",2:"D",3:"F",4:"H",5:"G",6:"Z",7:"X",8:"C",9:"V",11:"B",12:"Q",13:"W",14:"E",15:"R",16:"Y",17:"T",18:"1",19:"2",20:"3",21:"4",22:"6",23:"5",24:"=",25:"9",26:"7",27:"−",28:"8",29:"0",30:"]",31:"O",32:"U",33:"[",34:"I",35:"P",36:"↩",37:"L",38:"J",39:"'",40:"K",41:";",42:"\\",43:",",44:"/",45:"N",46:"M",47:".",48:"Tab",49:"Space",50:"`",51:"⌫",53:"Esc",96:"F5",97:"F6",98:"F7",99:"F3",100:"F8",101:"F9",103:"F11",109:"F10",111:"F12",115:"Home",116:"Page Up",117:"⌦",118:"F4",119:"End",120:"F2",121:"Page Down",122:"F1",123:"←",124:"→",125:"↓",126:"↑"]
     public var isSafeTrigger: Bool {
         modifiers != 0 || [UInt16(96), 97, 98, 99, 100, 101, 103, 109, 111, 118, 120, 122].contains(keyCode)
     }
@@ -181,6 +181,15 @@ public struct Rule: Codable, Equatable, Identifiable, Sendable {
         if action == .previousDesktop && ["上一个桌面", "Previous Desktop"].contains(name) { return action.title }
         return name
     }
+    /// Drafts can keep fields while switching actions. Committed/exported rules keep only the active target.
+    public var withoutUnusedActionFields: Self {
+        var saved = self
+        if action != .shortcut { saved.outputKey = nil }
+        if action != .openApplication { saved.appPath = "" }
+        if action != .openLink { saved.linkAddress = nil }
+        if action != .openFileOrFolder { saved.fileOrFolderPath = nil }
+        return saved
+    }
     public var shortcutToSend: Shortcut? { action == .shortcut ? outputKey : action.standardShortcut }
     public static func webURL(_ input: String) -> URL? {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -247,6 +256,7 @@ public enum AppAppearance: String, Codable, CaseIterable, Sendable {
 }
 
 public struct Configuration: Codable, Equatable, Sendable {
+    public static let maxRules = 500
     public var version = 1
     public var rules: [Rule]
     public var showTrail = true
@@ -271,12 +281,18 @@ public struct Configuration: Codable, Equatable, Sendable {
     }
     public init(rules: [Rule] = []) { self.rules = rules }
     public mutating func removeLegacyPlaceholders() { rules.removeAll(where: \.needsReview) }
-    public mutating func addDefaultRightClickIfMissing() {
-        guard !rules.contains(where: { $0.kind == .click && $0.mouseButton == 1 && $0.bundleID.isEmpty }) else { return }
-        rules.append(Rule(name: L10n.text("调度中心"), kind: .click, action: .missionControl))
+    public mutating func addDefaultMissionControlGestureIfMissing() {
+        guard rules.count < Self.maxRules else { return }
+        let preset = Rule(name: ActionKind.missionControl.title, kind: .gesture, button: 1,
+                          points: Shape.preset(.up), shapeName: ShapePreset.up.rawValue, action: .missionControl)
+        guard !rules.contains(where: {
+            $0.bundleID.isEmpty && ($0.action == .missionControl || RuleResolver.sameTrigger($0, preset) ||
+                ($0.kind == .gesture && $0.mouseButton == preset.mouseButton && Shape.equivalentTemplates($0.points, preset.points)))
+        }) else { return }
+        rules.append(preset)
     }
     public func validate() throws {
-        guard version == 1, rules.count <= 500, Set(rules.map(\.id)).count == rules.count else {
+        guard version == 1, rules.count <= Self.maxRules, Set(rules.map(\.id)).count == rules.count else {
             throw ConfigError.invalid(L10n.text("配置版本不支持、规则过多或 ID 重复。"))
         }
         guard (storedTrailStyle ?? TrailStyle()).isValid else { throw ConfigError.invalid(L10n.text("轨迹颜色或粗细无效。")) }
@@ -299,7 +315,7 @@ public struct Configuration: Codable, Equatable, Sendable {
         rules.append(Rule(name: L10n.text("复制"), kind: .click, button: 4, output: Shortcut(8, 0x100000)))
         rules.append(Rule(name: L10n.text("粘贴"), kind: .click, button: 3, output: Shortcut(9, 0x100000)))
         var config = Self(rules: rules)
-        config.addDefaultRightClickIfMissing()
+        config.addDefaultMissionControlGestureIfMissing()
         return config
     }
 }
@@ -333,6 +349,8 @@ public enum RuleResolver {
             global.bundleID.isEmpty && !local.contains { sameTrigger($0, global) }
         }
     }
+    // Exact identity for editor conflicts. Fuzzy template similarity isn't a configuration-wide
+    // conflict: resolve it against the actual stroke and its scoped candidates in Shape.recognize.
     public static func sameTrigger(_ a: Rule, _ b: Rule) -> Bool {
         guard a.kind == b.kind else { return false }
         switch a.kind {
