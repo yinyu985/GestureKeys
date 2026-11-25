@@ -25,7 +25,9 @@ enum ActionFailure: Sendable {
 final class EventEngine: @unchecked Sendable {
     static let marker: Int64 = 0x474b_4559_535f_3031
     private let lock = NSLock()
-    private var configuration = Configuration()
+    private var ruleIndex: RuleIndex?
+    private var scopedRules = ScopedRules.empty
+    private var showTrail = false
     /// Capture this under the same lock as the rules. An action must never acquire a new target.
     private struct Target: Equatable {
         var app = "", pid: pid_t = 0, epoch: UInt64 = 0
@@ -38,6 +40,11 @@ final class EventEngine: @unchecked Sendable {
     private var stopping = false
     private var runID: UInt64 = 0
     private let actions = DispatchQueue(label: "GestureKeys.actions", qos: .userInteractive)
+    // Protected by lock. The display queue reads the latest frame when it is ready.
+    private let trailQueue: DispatchQueue
+    private var pendingTrail: [StrokePoint]?
+    private var trailDeliveryScheduled = false
+    private var trailVisible = false
     // Worker-thread-only state.
     private var discardUntilUp = Set<Int>()
     private var stroke: StrokeSession?
@@ -53,8 +60,7 @@ final class EventEngine: @unchecked Sendable {
     private var pendingClick: PendingClick?
     private var clickTimer: Timer?
     private var doubleClickInterval = NSEvent.doubleClickInterval
-    private var strokeRules: [Rule] = []
-    private var canMatchGesture = false
+    private var strokeBindings = MouseBindings.empty
     private var buffered: [CGEvent] = []
     private var lastTrailTime = 0.0
     // In-process checks inject sinks; they never create a tap or post real input.
@@ -66,32 +72,53 @@ final class EventEngine: @unchecked Sendable {
     init(foregroundPID: @escaping () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier },
          postKey: @escaping (CGEvent, pid_t?) -> Void = { event, pid in
              if let pid { event.postToPid(pid) } else { event.post(tap: .cghidEventTap) }
-         }) { self.foregroundPID = foregroundPID; self.postKey = postKey }
+         }, trailQueue: DispatchQueue = .main) {
+        self.foregroundPID = foregroundPID
+        self.postKey = postKey
+        self.trailQueue = trailQueue
+    }
 
     var onStatus: ((Bool, MonitorIssue?) -> Void)?
     var onAction: ((Rule) -> Void)?
     var onActionError: ((Rule, ActionFailure) -> Void)?
     var onTrail: (([StrokePoint]?) -> Void)?
 
-    func update(_ config: Configuration, frontmost: String, suspended: Bool, pid: pid_t = 0) {
-        lock.lock(); defer { lock.unlock() }
-        if target.app != frontmost || target.pid != pid || uiSuspended != suspended || configuration.rules != config.rules { target.epoch &+= 1 }
-        configuration = config; target.app = frontmost; target.pid = pid; uiSuspended = suspended
+    @discardableResult
+    func update(_ index: RuleIndex, showTrail: Bool, frontmost: String, suspended: Bool,
+                pid: pid_t = 0) -> (rules: ScopedRules, contextChanged: Bool) {
+        lock.lock()
+        if ruleIndex !== index || target.app != frontmost {
+            // The input thread can keep using its old snapshot while the new scope is prepared.
+            lock.unlock()
+            let nextRules = index.scoped(to: frontmost)
+            lock.lock()
+            scopedRules = nextRules
+        }
+        defer { lock.unlock() }
+        let changed = ruleIndex !== index || target.app != frontmost || target.pid != pid || uiSuspended != suspended
+        if changed { target.epoch &+= 1 }
+        if changed || (self.showTrail && !showTrail) { hideTrailLocked() }
+        ruleIndex = index
+        target.app = frontmost
+        target.pid = pid
+        uiSuspended = suspended
+        self.showTrail = showTrail
+        return (scopedRules, changed)
     }
     func press(_ shortcut: Shortcut) {
-        let (config, target, suspended, stopping) = snapshot()
+        let (rules, _, target, suspended, stopping) = snapshot()
         let app = target.app, trace = UUID().uuidString
         let facts = ["trace": trace, "app": app, "shortcut": shortcut.display]
         diagnostics.record("hotkey.received", facts)
         guard !suspended, !stopping else { diagnostics.record("input.skipped", facts.merging(["reason": "monitor_unavailable"]) { _, new in new }); return }
-        guard let rule = RuleResolver.scoped(config.rules, bundleID: app).first(where: { $0.kind == .keyboard && $0.triggerKey == shortcut }) else {
+        guard let rule = rules.keyboardRule(for: shortcut) else {
             diagnostics.record("input.no_rule", facts); return
         }
         execute(rule, trace: trace, target: target)
     }
-    private func snapshot() -> (config: Configuration, target: Target, suspended: Bool, stopping: Bool) {
+    private func snapshot() -> (rules: ScopedRules, showTrail: Bool, target: Target, suspended: Bool, stopping: Bool) {
         lock.lock(); defer { lock.unlock() }
-        return (configuration, target, uiSuspended, stopping)
+        return (scopedRules, showTrail, target, uiSuspended, stopping)
     }
     private func isCurrent(_ expected: Target) -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -109,7 +136,7 @@ final class EventEngine: @unchecked Sendable {
         t.start()
     }
     func stop() {
-        lock.lock(); stopping = true; let currentLoop = loop; lock.unlock()
+        lock.lock(); stopping = true; hideTrailLocked(); let currentLoop = loop; lock.unlock()
         if let currentLoop {
             CFRunLoopPerformBlock(currentLoop, CFRunLoopMode.commonModes.rawValue) { CFRunLoopStop(currentLoop) }
             CFRunLoopWakeUp(currentLoop)
@@ -155,12 +182,40 @@ final class EventEngine: @unchecked Sendable {
         diagnostics.record("tap.stopped")
         status(false)
     }
-    private func hideTrail() {
-        DispatchQueue.main.async { [weak self] in self?.onTrail?(nil) }
+    private func submitTrail(_ points: [StrokePoint], target expected: Target) {
+        lock.lock(); defer { lock.unlock() }
+        guard showTrail, !stopping, !uiSuspended, target == expected else { return }
+        pendingTrail = points
+        scheduleTrailDeliveryLocked()
+    }
+    private func hideTrailLocked() {
+        pendingTrail = nil
+        if trailVisible { scheduleTrailDeliveryLocked() }
+    }
+    private func scheduleTrailDeliveryLocked() {
+        guard !trailDeliveryScheduled else { return }
+        trailDeliveryScheduled = true
+        trailQueue.async { [weak self] in self?.deliverTrail() }
+    }
+    private func deliverTrail() {
+        lock.lock()
+        let points = pendingTrail
+        let shouldUpdate = points != nil || trailVisible
+        trailVisible = points != nil
+        pendingTrail = nil
+        trailDeliveryScheduled = false
+        lock.unlock()
+        if shouldUpdate { onTrail?(points) }
+    }
+    private func finishStrokeTrail() {
+        guard lastTrailTime != 0 else { return }
+        lastTrailTime = 0
+        lock.lock(); hideTrailLocked(); lock.unlock()
     }
     private func resetStroke() {
-        stroke = nil; secondClick = false; buffered.removeAll(keepingCapacity: true); strokeRules.removeAll(keepingCapacity: true)
-        hideTrail()
+        stroke = nil; secondClick = false; buffered.removeAll(keepingCapacity: true)
+        strokeBindings = .empty
+        finishStrokeTrail()
     }
     private func replay(_ events: [CGEvent], proxy: CGEventTapProxy? = nil) {
         if let verificationReplay { verificationReplay(events); return }
@@ -170,11 +225,27 @@ final class EventEngine: @unchecked Sendable {
             else { event.post(tap: .cgSessionEventTap) }
         }
     }
+    private func gestureFailureDetails(_ failure: Shape.Failure, closest: [Shape.Candidate] = []) -> [String: String] {
+        var facts = ["recognition_failure": failure.rawValue, "candidates": String(strokeBindings.templates.count),
+                     "point_count": String(stroke?.points.count ?? 0),
+                     "match_cutoff": String(Shape.matchCutoff), "ambiguity_margin": String(Shape.ambiguityMargin)]
+        for (rank, candidate) in zip(["best", "second"], closest) {
+            facts["\(rank)_rule"] = candidate.ruleID.uuidString
+            facts["\(rank)_distance"] = String(candidate.distance)
+        }
+        return facts
+    }
     /// Hand a complete prefix back to the same context. A new target must not see a drag or an up without a down.
-    private func releaseStroke(_ reason: String, proxy: CGEventTapProxy? = nil, finished: Bool = false, log: String = "mouse.cancelled") {
+    private func releaseStroke(_ reason: String, proxy: CGEventTapProxy? = nil, finished: Bool = false,
+                               log: String = "mouse.cancelled", details: [String: String] = [:]) {
         guard stroke != nil else { return }
+        finishStrokeTrail()
         let sameContext = snapshot().target == strokeTarget
-        diagnostics.record(log, ["trace": strokeTrace, "reason": reason, "replayed": String(sameContext)])
+        var facts = details
+        facts["trace"] = strokeTrace
+        facts["reason"] = reason
+        facts["replayed"] = String(sameContext)
+        diagnostics.record(log, facts)
         if sameContext { replay(buffered, proxy: proxy) }
         else if !finished { discardUntilUp.insert(strokeButton) }
         resetStroke()
@@ -268,8 +339,8 @@ final class EventEngine: @unchecked Sendable {
                 // A user-defined shortcut travels the normal keyboard route, including system hotkeys.
                 let targeted = !rule.action.isSystemShortcut
                 if !targeted {
-                    let config = self.snapshot().config
-                    if RuleResolver.scoped(config.rules, bundleID: target.app).contains(where: { $0.kind == .keyboard && $0.triggerKey == shortcut }) {
+                    let current = self.snapshot()
+                    if current.target == target && current.rules.keyboardRule(for: shortcut) != nil {
                         diagnostics.record("action.shortcut_failed", facts.merging(["reason": "would_retrigger_hotkey"]) { _, new in new })
                         DispatchQueue.main.async { [weak self] in
                             self?.onActionError?(rule, .wouldRetriggerHotkey)
@@ -306,7 +377,7 @@ final class EventEngine: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
         if event.getIntegerValueField(.eventSourceUserData) == Self.marker { return Unmanaged.passUnretained(event) }
-        let (config, target, suspended, stopping) = snapshot()
+        let (rules, showTrail, target, suspended, stopping) = snapshot()
         let app = target.app, button = Int(event.getIntegerValueField(.mouseEventButtonNumber))
         let isDown = type == .rightMouseDown || type == .otherMouseDown
         let isUp = type == .rightMouseUp || type == .otherMouseUp
@@ -329,25 +400,25 @@ final class EventEngine: @unchecked Sendable {
             releaseStroke("overlapping_button", proxy: proxy)
         }
         if isDown {
-            let candidates = RuleResolver.scoped(config.rules, bundleID: app).filter { $0.kind != .keyboard && $0.mouseButton == button }
-            let doubleEnabled = candidates.contains { $0.kind == .click && $0.clickCount == 2 }
+            let bindings = rules.mouseBindings(for: button)
             if let pending = pendingClick {
                 let gap = time - pending.releasedAt
-                secondClick = doubleEnabled && pending.button == button && (0...doubleClickInterval).contains(gap) && pending.point.distance(to: point) <= 8
+                secondClick = bindings.doubleClick != nil && pending.button == button && (0...doubleClickInterval).contains(gap) && pending.point.distance(to: point) <= 8
                 if secondClick { armClickTimer() }
                 else { resolvePendingClick(proxy: proxy) }
             }
             let trace = UUID().uuidString
-            diagnostics.record("mouse.received", ["trace": trace, "app": app, "button": Rule.buttonName(button), "candidates": String(candidates.count)])
-            guard !candidates.isEmpty else { diagnostics.record("input.no_rule", ["trace": trace]); return Unmanaged.passUnretained(event) }
+            diagnostics.record("mouse.received", ["trace": trace, "app": app, "button": Rule.buttonName(button), "candidates": String(bindings.count)])
+            guard bindings.count > 0 else { diagnostics.record("input.no_rule", ["trace": trace]); return Unmanaged.passUnretained(event) }
+            finishStrokeTrail()
             strokeTrace = trace
-            strokeButton = button; strokeTarget = target; strokeRules = candidates
-            canMatchGesture = candidates.contains { $0.kind == .gesture }
+            strokeButton = button; strokeTarget = target; strokeBindings = bindings
             stroke = StrokeSession(start: point, time: time)
             buffered = event.copy().map { [$0] } ?? []
             return nil
         }
         if (isDrag || isUp), button == strokeButton, stroke != nil {
+            if isUp { finishStrokeTrail() }
             if let copy = event.copy() { buffered.append(copy) }
             guard buffered.count <= 4096, stroke!.append(point, time: time) else {
                 resolvePendingClick(proxy: proxy)
@@ -355,32 +426,38 @@ final class EventEngine: @unchecked Sendable {
                 return nil
             }
             if secondClick && stroke!.isDrag { resolvePendingClick(proxy: proxy); secondClick = false }
-            if stroke!.isDrag && !canMatchGesture {
-                releaseStroke("no_gesture_rule", proxy: proxy, finished: isUp, log: "mouse.no_match")
+            if stroke!.isDrag && strokeBindings.templates.isEmpty {
+                releaseStroke("no_gesture_rule", proxy: proxy, finished: isUp, log: "mouse.no_match",
+                              details: gestureFailureDetails(.noTemplates))
                 return nil
             }
-            let now = ProcessInfo.processInfo.systemUptime
-            if config.showTrail && stroke!.isDrag && now - lastTrailTime > 1.0 / 30 {
-                lastTrailTime = now
-                let path = stroke!.points
-                DispatchQueue.main.async { [weak self] in self?.onTrail?(path) }
+            if isDrag && showTrail && stroke!.isDrag {
+                let now = ProcessInfo.processInfo.systemUptime
+                if now - lastTrailTime > 1.0 / 30 {
+                    lastTrailTime = now
+                    submitTrail(stroke!.points, target: strokeTarget)
+                }
             }
             if isUp {
                 let current = stroke!
                 var matched: Rule?
                 var missReason = "no_click_rule"
+                var missDetails: [String: String] = [:]
                 if current.isDrag {
-                    let candidates = strokeRules.filter { $0.kind == .gesture }
-                    switch Shape.recognize(current.points, rules: candidates) {
+                    let result = Shape.recognize(current.points, templates: strokeBindings.templates)
+                    switch result.match {
                     case .matched(let id, let distance):
-                        matched = candidates.first { $0.id == id }
-                        diagnostics.record("gesture.recognized", ["trace": strokeTrace, "distance": String(distance), "candidates": String(candidates.count)])
-                    case .ambiguous: missReason = "ambiguous_gesture"
-                    case .noMatch: missReason = "no_matching_shape"
+                        matched = strokeBindings.templates.first { $0.rule.id == id }?.rule
+                        diagnostics.record("gesture.recognized", ["trace": strokeTrace, "distance": String(distance), "candidates": String(strokeBindings.templates.count)])
+                    case .ambiguous, .noMatch:
+                        missReason = result.match == .ambiguous ? "ambiguous_gesture" : "no_matching_shape"
+                        if let failure = result.failure {
+                            missDetails = gestureFailureDetails(failure, closest: result.candidates)
+                        }
                     }
                 } else {
-                    let single = strokeRules.first { $0.kind == .click && $0.clickCount == 1 }
-                    if let double = strokeRules.first(where: { $0.kind == .click && $0.clickCount == 2 }) {
+                    let single = strokeBindings.singleClick
+                    if let double = strokeBindings.doubleClick {
                         if secondClick, pendingClick != nil {
                             if let pending = pendingClick { diagnostics.record("mouse.double_click", ["trace": strokeTrace, "first_click": pending.trace]) }
                             clickTimer?.invalidate(); clickTimer = nil; pendingClick = nil; matched = double
@@ -394,7 +471,7 @@ final class EventEngine: @unchecked Sendable {
                     } else { matched = single }
                 }
                 if let matched { execute(matched, trace: strokeTrace, target: strokeTarget); resetStroke() }
-                else { releaseStroke(missReason, proxy: proxy, finished: true, log: "mouse.no_match") }
+                else { releaseStroke(missReason, proxy: proxy, finished: true, log: "mouse.no_match", details: missDetails) }
             }
             return nil
         }
@@ -405,8 +482,8 @@ final class EventEngine: @unchecked Sendable {
         var replayed = 0
         var checks = 0
         func engine(_ rules: [Rule]) -> EventEngine {
-            let e = EventEngine(); var config = Configuration(rules: rules); config.showTrail = false
-            e.update(config, frontmost: "test.browser", suspended: false)
+            let e = EventEngine()
+            e.update(RuleIndex(rules), showTrail: false, frontmost: "test.browser", suspended: false)
             e.verificationActions = []; e.verificationReplay = { replayed += $0.count }
             return e
         }
@@ -426,7 +503,7 @@ final class EventEngine: @unchecked Sendable {
         let h = engine([hotkey])
         h.press(Shortcut(18, 0x40000)); h.press(Shortcut(19, 0x40000))
         try require(h.verificationActions == [hotkey.id], "系统热键分发仅执行已绑定规则")
-        h.update(Configuration(rules: [hotkey]), frontmost: "test.browser", suspended: true)
+        h.update(RuleIndex([hotkey]), showTrail: false, frontmost: "test.browser", suspended: true)
         h.press(Shortcut(18, 0x40000))
         try require(h.verificationActions == [hotkey.id], "设置时不执行热键")
 
@@ -452,7 +529,7 @@ final class EventEngine: @unchecked Sendable {
 
         let switched = engine([diagonal]); replayed = 0
         _ = mouse(switched, .rightMouseDown, 0, 100)
-        switched.update(Configuration(rules: [diagonal]), frontmost: "test.other", suspended: false)
+        switched.update(RuleIndex([diagonal]), showTrail: false, frontmost: "test.other", suspended: false)
         try require(mouse(switched, .rightMouseDragged, 40, 60) && mouse(switched, .rightMouseDragged, 60, 40) && mouse(switched, .rightMouseUp, 100, 0), "新应用不会收到孤立的拖动与松开事件")
         try require(switched.verificationActions!.isEmpty && replayed == 0, "切换应用不误操作新应用")
 
@@ -470,22 +547,22 @@ final class EventEngine: @unchecked Sendable {
 
         // Exercise the actual final send site, not just the matched rule ID. Never post to the OS.
         var appRule = diagonal; appRule.bundleID = "test.A"
-        let config = Configuration(rules: [appRule]); var sent: [pid_t?] = [], livePID: pid_t = 111
+        let index = RuleIndex([appRule]); var sent: [pid_t?] = [], livePID: pid_t = 111
         let route = EventEngine(foregroundPID: { livePID }, postKey: { _, pid in sent.append(pid) })
         route.verificationReplay = { _ in }
         func draw() { _ = mouse(route, .rightMouseDown, 0, 100); _ = mouse(route, .rightMouseUp, 100, 0) }
-        route.update(config, frontmost: "test.A", suspended: false, pid: 111)
+        route.update(index, showTrail: false, frontmost: "test.A", suspended: false, pid: 111)
         draw(); route.actions.sync {}
         try require(sent == [111,111], "不切前台时仅向原 PID 发送按下和松开")
         sent.removeAll()
         let matchedTarget = route.snapshot().target
-        route.update(config, frontmost: "test.B", suspended: false, pid: 222)
+        route.update(index, showTrail: false, frontmost: "test.B", suspended: false, pid: 222)
         route.execute(appRule, trace: "check-after-match", target: matchedTarget); route.actions.sync {}
         try require(sent.isEmpty, "匹配后切换不重新领取目标 PID")
-        route.update(config, frontmost: "test.A", suspended: false, pid: 111)
+        route.update(index, showTrail: false, frontmost: "test.A", suspended: false, pid: 111)
         route.actions.suspend(); draw()
-        route.update(config, frontmost: "test.B", suspended: false, pid: 222)
-        route.update(config, frontmost: "test.A", suspended: false, pid: 111)
+        route.update(index, showTrail: false, frontmost: "test.B", suspended: false, pid: 222)
+        route.update(index, showTrail: false, frontmost: "test.A", suspended: false, pid: 111)
         route.actions.resume(); route.actions.sync {}
         try require(sent.isEmpty, "排队期间切走又切回也取消旧动作")
         livePID = 222; draw(); route.actions.sync {}
@@ -511,7 +588,7 @@ final class EventEngine: @unchecked Sendable {
         try require(replayed == 2 && doublesOnly.verificationActions!.isEmpty, "仅绑定双击时回放普通单击")
         let other = engine([click, double]); replayed = 0
         _ = mouse(other, .rightMouseDown, 4, 5); _ = mouse(other, .rightMouseUp, 4, 5)
-        other.update(Configuration(rules: [click, double]), frontmost: "test.other", suspended: false)
+        other.update(RuleIndex([click, double]), showTrail: false, frontmost: "test.other", suspended: false)
         other.resolvePendingClick()
         try require(replayed == 0 && other.verificationActions!.isEmpty, "切换前台后不派发旧单击")
 
@@ -537,6 +614,47 @@ final class EventEngine: @unchecked Sendable {
         for i in 0..<8 { _ = mouse(side, .otherMouseDragged, i.isMultiple(of: 2) ? 1 : -1, 0, button: 4) }
         _ = mouse(side, .otherMouseUp, 0, 0, button: 4)
         try require(side.verificationActions == [sideRule.id, sideRule.id], "容差内原地抖动仍是单击")
+
+        // Hold the display queue for each batch, then wait until its pending delivery has run.
+        let displayQueue = DispatchQueue(label: "GestureKeys.trail-check")
+        let trail = EventEngine(trailQueue: displayQueue)
+        let trailIndex = RuleIndex([diagonal])
+        trail.update(trailIndex, showTrail: true, frontmost: "test.browser", suspended: false)
+        trail.verificationActions = []; trail.verificationReplay = { _ in }
+        var frames: [[StrokePoint]?] = []
+        trail.onTrail = { frames.append($0) }
+        func batch(_ work: () -> Void) { displayQueue.sync(execute: work); displayQueue.sync {} }
+        func drag(_ x: Double, _ y: Double) {
+            trail.lastTrailTime = 0 // Advance past the frame cap without sleeping.
+            _ = mouse(trail, .rightMouseDragged, x, y)
+        }
+        batch {
+            _ = mouse(trail, .rightMouseDown, 0, 100)
+            drag(20, 80); drag(40, 60); drag(60, 40)
+        }
+        let latest = [StrokePoint(0, 100), StrokePoint(20, 80), StrokePoint(40, 60), StrokePoint(60, 40)]
+        try require(frames == [latest], "显示队列繁忙时只交付最新轨迹")
+        batch { drag(80, 20); _ = mouse(trail, .rightMouseUp, 100, 0) }
+        try require(frames == [latest, nil], "松开后丢弃未显示的轨迹并隐藏已显示的轨迹")
+        frames.removeAll()
+        batch {
+            _ = mouse(trail, .rightMouseDown, 0, 100); drag(20, 80)
+            _ = mouse(trail, .rightMouseUp, 50, 50)
+            _ = mouse(trail, .rightMouseDown, 10, 100); drag(30, 80)
+        }
+        let nextStroke = [StrokePoint(10, 100), StrokePoint(30, 80)]
+        try require(frames == [nextStroke], "开始下一笔后过期轨迹不会再出现")
+        batch {
+            drag(50, 60)
+            trail.update(trailIndex, showTrail: false, frontmost: "test.browser", suspended: false)
+            trail.update(trailIndex, showTrail: true, frontmost: "test.browser", suspended: false)
+        }
+        try require(frames == [nextStroke, nil], "关闭再打开轨迹仍会撤销原先排队的画面")
+        frames.removeAll()
+        batch { drag(70, 40); _ = mouse(trail, .leftMouseDown, 70, 40, button: 0) }
+        try require(frames.isEmpty, "另一按键取消手势时撤销待显示的轨迹")
+        batch { _ = mouse(trail, .rightMouseDown, 0, 100); drag(20, 80); trail.stop() }
+        try require(frames.isEmpty, "停止监听时撤销尚未显示的轨迹")
         return checks
     }
 }

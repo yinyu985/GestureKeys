@@ -33,10 +33,12 @@ struct CoreChecks {
             ("all preset shapes", suite.testPresetsRecognizeWithoutCrossMatches),
             ("noisy V", suite.testJitteredVMatchesV),
             ("ambiguous rejection", suite.testAmbiguousShapesDoNotExecute),
+            ("rejection diagnostics use ranked distances and thresholds", suite.testRecognitionDiagnostics),
             ("invalid paths", suite.testShortAndNonFinitePathsRejected),
             ("app override", suite.testAppOverrideBlocksGlobal),
             ("disabled and unreviewed rules", suite.testDisabledAndReviewRulesExcluded),
             ("conflict detection", suite.testDuplicateHotkeysDetectedButDifferentScopesAllowed),
+            ("indexed keyboard, mouse and gesture bindings", suite.testRuleIndex),
             ("config round trip", suite.testConfigurationRoundTripAndDuplicateIDs),
             ("click/drag and timeout", suite.testStrokeDistinguishesClickAndDragAndBoundsDuration),
             ("BAB importer skips unsupported rules", suite.testBABImportKnownKeyboardAndUnknownShape),
@@ -176,7 +178,11 @@ final class GestureCoreTests {
         let global = Rule(kind: .gesture, points: up, shapeName: "↑", action: .missionControl)
         var local = Rule(kind: .gesture, points: freehand, action: .copy, bundleID: "com.apple.Safari")
         func match(_ points: [StrokePoint], _ rules: [Rule], in app: String) -> Shape.Match {
-            Shape.recognize(points, rules: RuleResolver.scoped(rules, bundleID: app))
+            let expected = Shape.recognize(points, rules: RuleResolver.scoped(rules, bundleID: app))
+            let scoped = RuleIndex(rules).scoped(to: app)
+            let actual = Shape.recognize(points, templates: scoped.mouseBindings(for: 1).templates).match
+            XCTAssertEqual(actual, expected)
+            return actual
         }
         for preset in [false, true] {
             if preset { local.points = up; local.shapeName = "↑" }
@@ -191,6 +197,52 @@ final class GestureCoreTests {
         // Midway between two *distinct* directions is not a reason to pick the scoped rule.
         other.points = [StrokePoint(0,100), StrokePoint(30,0)]
         XCTAssertEqual(match([StrokePoint(0,100), StrokePoint(15,0)], [global, other], in: local.bundleID), .ambiguous)
+    }
+    func testRuleIndex() {
+        let safari = "com.apple.Safari", finder = "com.apple.finder"
+        let key = Shortcut(18, 0x40000)
+        let global = Rule(key: key, action: .copy)
+        let override = Rule(key: key, action: .block, bundleID: safari)
+        let other = Rule(key: Shortcut(19, 0x40000), action: .paste, bundleID: finder)
+        let click = Rule(kind: .click, button: 3, action: .copy)
+        var double = Rule(kind: .click, button: 3, action: .paste, bundleID: safari)
+        double.clickCount = 2
+        let stroke = Rule(kind: .gesture, button: 3, points: Shape.preset(.up), action: .copy)
+        let invalid = Rule(kind: .gesture, button: 3, action: .copy)
+        let disabled = Rule(key: key, action: .paste, enabled: false)
+        let rules = [global, click, other, stroke, double, override, invalid, disabled]
+        let index = RuleIndex(rules)
+        XCTAssertTrue(index.hasEnabledRules)
+        XCTAssertFalse(index.hasConflicts)
+        XCTAssertEqual(index.activeKeyboardRules, [global, other, override])
+        for app in ["", safari, finder, "example.Other"] {
+            let scope = index.scoped(to: app)
+            let expected = RuleResolver.scoped(rules, bundleID: app)
+            let keys = expected.filter { $0.kind == .keyboard }
+            XCTAssertEqual(scope.keyboardRules, keys)
+            XCTAssertEqual(scope.shortcuts, Set(keys.compactMap(\.triggerKey)))
+            XCTAssertEqual(scope.keyboardRule(for: key), keys.first { $0.triggerKey == key })
+            for button in 1...7 {
+                let mouse = expected.filter { $0.kind != .keyboard && $0.mouseButton == button }
+                let bindings = scope.mouseBindings(for: button)
+                XCTAssertEqual(bindings.count, mouse.count)
+                XCTAssertEqual(bindings.singleClick, mouse.first { $0.kind == .click && $0.clickCount == 1 })
+                XCTAssertEqual(bindings.doubleClick, mouse.first { $0.kind == .click && $0.clickCount == 2 })
+                XCTAssertEqual(bindings.templates.map(\.rule), mouse.filter { $0.kind == .gesture })
+            }
+        }
+        XCTAssertFalse(RuleIndex([invalid, disabled]).hasEnabledRules)
+        let duplicate = Rule(key: key, action: .paste)
+        XCTAssertTrue(RuleIndex(rules + [duplicate]).hasConflicts)
+        let duplicateClick = Rule(kind: .click, button: 3, action: .undo)
+        let conflicting = RuleIndex([stroke, click, duplicateClick])
+        let bindings = conflicting.scoped(to: safari).mouseBindings(for: 3)
+        XCTAssertTrue(conflicting.hasConflicts)
+        XCTAssertEqual(bindings.count, 3)
+        XCTAssertEqual(bindings.singleClick, click)
+        let oldScope = index.scoped(to: safari)
+        XCTAssertEqual(RuleIndex([global]).scoped(to: safari).keyboardRule(for: key), global)
+        XCTAssertEqual(oldScope.keyboardRule(for: key), override)
     }
     func testHotKeyFailures() {
         let safari = "com.apple.Safari", one = Shortcut(18, 0x40000), two = Shortcut(19, 0x40000)

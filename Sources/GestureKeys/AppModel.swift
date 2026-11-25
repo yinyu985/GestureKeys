@@ -47,6 +47,7 @@ final class AppModel: ObservableObject {
     @Published var configuration = Configuration.defaults {
         didSet {
             if initialized && configuration != oldValue {
+                if configuration.rules != oldValue.rules { ruleIndex = RuleIndex(configuration.rules) }
                 if configuration.iconLocation != oldValue.iconLocation { onIconLocationChanged?(configuration.iconLocation) }
                 if configuration.appearance != oldValue.appearance { Ink.apply(configuration.appearance) }
                 if !configuration.showTrail { trail.update(nil) }
@@ -81,6 +82,9 @@ final class AppModel: ObservableObject {
     private var sheetObservers: [NSObjectProtocol] = []
     private let engine = EventEngine()
     private let hotKeys = GlobalHotKeys()
+    private lazy var ruleIndex = RuleIndex(configuration.rules)
+    private var hotKeysWereRunning = false
+    private var lastRejectedHotKeys = Set<Shortcut>()
     private var hotKeyFailures = HotKeyFailures()
     static let desktopOneShortcut = Shortcut(UInt16(kVK_ANSI_1), CGEventFlags.maskControl.rawValue)
     @Published private(set) var desktopOneUnavailable = false
@@ -159,7 +163,7 @@ final class AppModel: ObservableObject {
         }
         engine.onAction = { [weak self] rule in
             guard let self else { return }
-            self.actionIssue = nil
+            if self.actionIssue != nil { self.actionIssue = nil }
             if rule.showsName == true { self.nameHUD.show(rule.displayName) }
         }
         engine.onActionError = { [weak self] rule, failure in
@@ -196,7 +200,6 @@ final class AppModel: ObservableObject {
     var visibleRules: [Rule] {
         RuleResolver.libraryOrder(configuration.rules, keyboard: page == .keyboard)
     }
-    var conflicts: [String] { RuleResolver.conflicts(configuration.rules) }
     func routingReason(pid: pid_t) -> String {
         if pid <= 0 { return "no_foreground" }
         guard pid == ProcessInfo.processInfo.processIdentifier else { return "none" }
@@ -207,7 +210,7 @@ final class AppModel: ObservableObject {
         if sheetVisible || NSApp.modalWindow != nil { return "modal_window" }
         return "none"
     }
-    func syncEngine() {
+    func syncEngine(retryRejected: Bool = false) {
         guard initialized, !isShuttingDown else { return }
         let front = NSWorkspace.shared.frontmostApplication
         let foreground = front?.bundleIdentifier ?? ""
@@ -216,12 +219,17 @@ final class AppModel: ObservableObject {
         let suspended = reason != "none"
         let context = ["app": foreground, "pid": String(pid), "routing": reason]
         if context != loggedContext { loggedContext = context; diagnostics.record("input.context", context) }
-        engine.update(configuration, frontmost: foreground, suspended: suspended, pid: pid)
-        let desktopOne = Self.desktopOneShortcut
-        let attempted = running && !suspended ? RuleResolver.scoped(configuration.rules, bundleID: foreground).filter { $0.kind == .keyboard } : []
-        let rejected = hotKeys.replace(with: Set(attempted.compactMap(\.triggerKey)))
-        if running { hotKeyFailures.update(rules: configuration.rules, attempted: attempted, rejected: Set(rejected)) }
+        let update = engine.update(ruleIndex, showTrail: configuration.showTrail, frontmost: foreground, suspended: suspended, pid: pid)
+        let registrationChanged = update.contextChanged || running != hotKeysWereRunning
+        guard registrationChanged || (retryRejected && !lastRejectedHotKeys.isEmpty) else { return }
+        let scope = running && !suspended ? update.rules : .empty
+        let rejected = Set(hotKeys.replace(with: scope.shortcuts))
+        guard registrationChanged || rejected != lastRejectedHotKeys else { return }
+        hotKeysWereRunning = running
+        lastRejectedHotKeys = rejected
+        if running { hotKeyFailures.update(rules: ruleIndex.activeKeyboardRules, attempted: scope.keyboardRules, rejected: rejected) }
         else { hotKeyFailures = HotKeyFailures() }
+        let desktopOne = Self.desktopOneShortcut
         let failures = hotKeyFailures.shortcuts
         if desktopOneUnavailable != failures.contains(desktopOne) { desktopOneUnavailable = failures.contains(desktopOne) }
         let others = failures.subtracting([desktopOne]).sorted { $0.display < $1.display }
@@ -234,7 +242,7 @@ final class AppModel: ObservableObject {
         let permissions = ["accessibility": String(accessibility), "input_monitoring": String(input),
                            "event_posting": String(CGPreflightPostEventAccess()), "secure_input": String(IsSecureEventInputEnabled())]
         if permissions != loggedPermissions { loggedPermissions = permissions; diagnostics.record("input.permissions", permissions) }
-        syncAutomaticMonitoring()
+        syncAutomaticMonitoring(retryRejected: true)
     }
     private func refreshLoginItem() {
         guard !isSmokeTest else { return }
@@ -273,11 +281,11 @@ final class AppModel: ObservableObject {
     private func openPrivacy(_ pane: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
     }
-    private func syncAutomaticMonitoring() {
+    private func syncAutomaticMonitoring(retryRejected: Bool = false) {
         guard !isSmokeTest else { syncEngine(); return }
-        let hasRules = configuration.rules.contains { $0.enabled && $0.validationError == nil }
+        let hasRules = ruleIndex.hasEnabledRules
         let permissionsOK = accessibilityGranted && inputGranted && CGPreflightPostEventAccess()
-        let hasConflicts = hasRules && !conflicts.isEmpty
+        let hasConflicts = ruleIndex.hasConflicts
         let issue: MonitorIssue? = hasConflicts ? .conflictingRules : hasRules && !permissionsOK ? .missingPermissions : nil
         let decision = !writable ? "invalid_configuration" : !hasRules ? "no_enabled_rules" : hasConflicts ? "rule_conflicts" : !permissionsOK ? "missing_permissions" : "allow"
         if loggedMonitorDecision != decision {
@@ -294,7 +302,7 @@ final class AppModel: ObservableObject {
         } else if monitorState == .running && monitorIssue != nil {
             monitorIssue = nil
         }
-        syncEngine()
+        syncEngine(retryRejected: retryRejected)
     }
     func addRule() {
         guard acceptsNewRule, !filePanelOpen else { return }
@@ -475,7 +483,7 @@ final class AppModel: ObservableObject {
         var rule = Rule(name: "Open test", key: key, action: .openApplication)
         rule.appPath = "/nonexistent-gesturekeys-\(UUID().uuidString)/Test App.app"
         let front = NSWorkspace.shared.frontmostApplication
-        engine.update(Configuration(rules: [rule]), frontmost: front?.bundleIdentifier ?? "", suspended: false, pid: front?.processIdentifier ?? 0)
+        engine.update(RuleIndex([rule]), showTrail: false, frontmost: front?.bundleIdentifier ?? "", suspended: false, pid: front?.processIdentifier ?? 0)
         engine.press(key)
     }
 }

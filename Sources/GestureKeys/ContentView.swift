@@ -90,10 +90,11 @@ struct ContentView: View {
         }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
     }
     private var library: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let rules = model.visibleRules
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 9) {
                 Text(model.page.title).font(.system(size: 22, weight: .semibold))
-                let count = model.visibleRules.count
+                let count = rules.count
                 Text(count == 1 ? L10n.text("1 条规则") : L10n.text("%1$@ 条规则", "\(count)")).font(.system(size: 11)).foregroundStyle(Ink.secondary)
                 Spacer()
                 Button(action: model.addRule) { Label(L10n.text("添加规则"), systemImage: "plus") }.buttonStyle(QuietButton(prominent: true))
@@ -113,10 +114,10 @@ struct ContentView: View {
             }.font(.system(size: 11, weight: .medium)).foregroundStyle(Ink.secondary).frame(height: 24)
             ScrollView {
                 LazyVStack(spacing: 3) {
-                    ForEach(model.visibleRules) { rule in
+                    ForEach(rules) { rule in
                         RuleRow(model: model, rule: model.binding(for: rule.id))
                     }
-                    if model.visibleRules.isEmpty {
+                    if rules.isEmpty {
                         Text(L10n.text("还没有规则")).font(.system(size: 13)).foregroundStyle(Ink.secondary)
                             .frame(maxWidth: .infinity).padding(.vertical, 38)
                     }

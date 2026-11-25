@@ -219,12 +219,15 @@ public struct Rule: Codable, Equatable, Identifiable, Sendable {
         switch n { case 0: return L10n.text("选择按键"); case 1: return L10n.text("右键"); case 2: return L10n.text("中键"); default: return L10n.text("第 %1$@ 键", "\(n + 1)") }
     }
     public var validationError: String? {
+        validationError(gestureIsValid: Shape.normalize(points) != nil)
+    }
+    func validationError(gestureIsValid: @autoclosure () -> Bool) -> String? {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return L10n.text("请填写规则名称。") }
         if needsReview { return L10n.text("此规则来自旧版不支持的导入格式。") }
         if kind == .keyboard && triggerKey == nil { return L10n.text("请录入触发快捷键。") }
         if kind == .keyboard && triggerKey?.isSafeTrigger != true { return L10n.text("请使用修饰键组合或功能键。") }
         if kind != .keyboard && !(1...7).contains(mouseButton) { return L10n.text("请选择右键、中键或侧键。") }
-        if kind == .gesture && Shape.normalize(points) == nil { return L10n.text("请绘制轨迹。") }
+        if kind == .gesture && !gestureIsValid() { return L10n.text("请绘制轨迹。") }
         if kind == .click && !(1...2).contains(clickCount) { return L10n.text("请选择单击或双击。") }
         if action == .unassigned { return L10n.text("请选择执行动作。") }
         if action == .shortcut && outputKey == nil { return L10n.text("请录入要发送的快捷键。") }
