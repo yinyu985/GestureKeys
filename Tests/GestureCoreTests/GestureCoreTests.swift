@@ -25,12 +25,16 @@ struct CoreChecks {
         let suite = GestureCoreTests()
         let checks: [(String, () throws -> Void)] = [
             ("modifier normalization", suite.testModifiersDropDeviceBits),
+            ("left/right output sequences and legacy shortcuts", suite.testPhysicalOutput),
             ("safe keyboard triggers", suite.testPlainTypingCannotBeRegistered),
             ("64-point sampling", suite.testNormalizationProduces64Points),
             ("translation and scale", suite.testTranslationAndScaleDoNotChangeShape),
             ("thumbnail fits wide, tall and custom strokes", suite.testThumbnail),
             ("direction discrimination", suite.testDirectionsRemainDistinct),
             ("all preset shapes", suite.testPresetsRecognizeWithoutCrossMatches),
+            ("one circle answers to either direction", suite.testCircleDirections),
+            ("V presets accept either starting side", suite.testVDirections),
+            ("four corner orders stay distinct", suite.testCornerDirections),
             ("noisy V", suite.testJitteredVMatchesV),
             ("ambiguous rejection", suite.testAmbiguousShapesDoNotExecute),
             ("rejection diagnostics use ranked distances and thresholds", suite.testRecognitionDiagnostics),
@@ -85,6 +89,21 @@ final class GestureCoreTests {
             XCTAssertEqual(defaults.stringArray(forKey: "AppleLanguages"), ["en-US"])
         }
     }
+    func testPhysicalOutput() throws {
+        let pure = Shortcut(physical: [58,55])!
+        XCTAssertEqual(pure.display, "L⌥ + L⌘")
+        XCTAssertEqual(pure.physicalSteps!.map(\.key), [58,55,55,58])
+        XCTAssertEqual(pure.physicalSteps!.map(\.flags), [0x80020,0x180028,0x80020,0])
+        XCTAssertTrue(pure.physicalSteps!.allSatisfy(\.modifier))
+        let sided = Shortcut(physical: [60,54], main: 11)!
+        XCTAssertEqual(sided.physicalSteps!.map(\.key), [60,54,11,11,54,60])
+        XCTAssertEqual(sided.physicalSteps!.map(\.flags), [0x20004,0x120014,0x120014,0x120014,0x20004,0])
+        let restored = try JSONDecoder().decode(Shortcut.self, from: JSONEncoder().encode(sided))
+        XCTAssertEqual(restored, sided)
+        XCTAssertNil(Shortcut(physical: [58,58]))
+        let legacy = try JSONDecoder().decode(Shortcut.self, from: Data(#"{"keyCode":11,"modifiers":1179648}"#.utf8))
+        XCTAssertNil(legacy.physicalSteps)
+    }
     func testModifiersDropDeviceBits() {
         XCTAssertEqual(Shortcut(18, 270592), Shortcut(18, 0x40000))
         XCTAssertEqual(Shortcut(18, 270592).display, "⌃1")
@@ -125,12 +144,74 @@ final class GestureCoreTests {
         XCTAssertGreaterThan(Shape.distance(a, b), 0.4)
     }
     func testPresetsRecognizeWithoutCrossMatches() {
+        for (up, down) in [(ShapePreset.upRight, ShapePreset.downLeft), (.upLeft, .downRight)] {
+            XCTAssertTrue(ShapePreset.editorOptions.contains(up) && ShapePreset.editorOptions.contains(down))
+            XCTAssertEqual(Shape.preset(up), Array(Shape.preset(down).reversed()))
+        }
         let rules = ShapePreset.allCases.map { Rule(name: $0.rawValue, kind: .gesture, points: Shape.preset($0), shapeName: $0.rawValue) }
         for (i, preset) in ShapePreset.allCases.enumerated() {
             guard case .matched(let id, _) = Shape.recognize(Shape.preset(preset), rules: rules) else {
                 XCTFail("Failed preset \(preset)")
             }
             XCTAssertEqual(id, rules[i].id)
+        }
+    }
+    func testCornerDirections() {
+        let rules = ShapePreset.editorOptions.map { Rule(name: $0.rawValue, kind: .gesture, points: Shape.preset($0)) }
+        let strokes: [(ShapePreset, [StrokePoint])] = [
+            (.upThenRight, [.init(8, 95), .init(4, 50), .init(9, 6), .init(55, 4), .init(95, 8)]),
+            (.upThenLeft, [.init(94, 97), .init(90, 52), .init(93, 6), .init(50, 8), .init(7, 4)]),
+            (.rightThenDown, [.init(4, 9), .init(52, 6), .init(93, 11), .init(96, 52), .init(91, 96)]),
+            (.leftThenDown, [.init(95, 6), .init(52, 9), .init(8, 4), .init(5, 55), .init(9, 97)])
+        ]
+        for (preset, points) in strokes {
+            guard case let .matched(id, _) = Shape.recognize(points, rules: rules) else { XCTFail("Missed \(preset)") }
+            XCTAssertEqual(rules.first { $0.id == id }?.name, preset.rawValue)
+        }
+    }
+    func testCircleDirections() {
+        let rules = ShapePreset.editorOptions.map {
+            Rule(name: $0.rawValue, kind: .gesture, points: Shape.preset($0), shapeName: $0.rawValue, action: .block)
+        }
+        let circleIndex = rules.firstIndex { $0.shapeName == ShapePreset.circle.rawValue }!
+        let ovals = [1.0, -1.0].map { direction in
+            let oval = (0...32).map { i in
+                let angle = 0.35 + direction * Double(i) * .pi / 16
+                return StrokePoint(180 + 45 * sin(angle), 240 - 55 * cos(angle))
+            }
+            return oval
+        }
+        let clockwise = rules[circleIndex].points
+        for preview in [clockwise, Array(clockwise.reversed())] {
+            var saved = rules
+            saved[circleIndex].points = preview
+            let templates = RuleIndex(saved).scoped(to: "").mouseBindings(for: 1).templates
+            for oval in ovals {
+                guard case let .matched(id, _) = Shape.recognize(oval, templates: templates).match else { XCTFail("Missed circle") }
+                XCTAssertEqual(id, saved[circleIndex].id)
+            }
+        }
+        let custom = Rule(name: "Freehand", kind: .gesture, points: Shape.preset(.circle), action: .block)
+        XCTAssertEqual(Shape.recognize(Array(custom.points.reversed()), rules: [custom]), .noMatch)
+    }
+    func testVDirections() {
+        XCTAssertFalse(ShapePreset.editorOptions.contains(.check))
+        let rules = ShapePreset.editorOptions.map {
+            Rule(name: $0.rawValue, kind: .gesture, points: Shape.preset($0), shapeName: $0.rawValue, action: .block)
+        }
+        let templates = RuleIndex(rules).scoped(to: "").mouseBindings(for: 1).templates
+        let examples: [(ShapePreset, [StrokePoint])] = [
+            (.v, [.init(4, 5), .init(52, 97), .init(103, 13)]),
+            (.caret, [.init(7, 102), .init(46, 4), .init(98, 95)])
+        ]
+        for (preset, points) in examples {
+            let expected = rules.first { $0.shapeName == preset.rawValue }!.id
+            for stroke in [points, Array(points.reversed())] {
+                guard case let .matched(id, _) = Shape.recognize(stroke, templates: templates).match else {
+                    XCTFail("Missed \(preset)")
+                }
+                XCTAssertEqual(id, expected)
+            }
         }
     }
     func testThumbnail() {

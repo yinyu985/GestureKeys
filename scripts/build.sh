@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 mode=local
+INSTALL_DIR="${GESTUREKEYS_INSTALL_DIR-/Applications}"
 if [[ "${1:-}" == --release || "${1:-}" == --self-signed ]]; then
   mode=${1#--}
   shift
@@ -22,13 +23,28 @@ if [[ "$mode" == release ]]; then
     echo 'The release signing identity is not available in the Keychain.' >&2
     exit 1
   fi
-elif [[ "$mode" == self-signed ]]; then
-  : "${GESTUREKEYS_SIGN_PEM:?Set the absolute path to the existing certificate and private key PEM}"
-  signer=${GESTUREKEYS_RCODESIGN:-rcodesign}
-  command -v "$signer" >/dev/null || { echo 'Self-signed builds require rcodesign.' >&2; exit 1; }
-  [[ "$GESTUREKEYS_SIGN_PEM" = /* && -r "$GESTUREKEYS_SIGN_PEM" ]] || { echo 'Signing PEM must be a readable absolute path.' >&2; exit 1; }
-  /usr/bin/openssl x509 -in "$GESTUREKEYS_SIGN_PEM" -checkend 0 -noout
 fi
+
+signing_pem=${GESTUREKEYS_SIGN_PEM-}
+if [[ "$mode" == self-signed ]]; then
+  : "${signing_pem:?Set GESTUREKEYS_SIGN_PEM to the existing certificate and private key PEM}"
+elif [[ "$mode" == local && -n "$INSTALL_DIR" && ! ${GESTUREKEYS_SIGN_PEM+x} ]]; then
+  local_identity="$HOME/.config/GestureKeys-signing/identity.pem"
+  if [[ -r "$local_identity" ]]; then signing_pem=$local_identity; fi
+fi
+if [[ "$mode" != release && -n "$signing_pem" ]]; then
+  signer=${GESTUREKEYS_RCODESIGN:-rcodesign}
+  if [[ ! ${GESTUREKEYS_RCODESIGN+x} && -x "$PWD/.build/signing-tools/rcodesign" ]]; then
+    signer="$PWD/.build/signing-tools/rcodesign"
+  fi
+  command -v "$signer" >/dev/null || { echo 'Self-signed builds require rcodesign.' >&2; exit 1; }
+  [[ "$signing_pem" = /* && -r "$signing_pem" ]] || { echo 'Signing PEM must be a readable absolute path.' >&2; exit 1; }
+  /usr/bin/openssl x509 -in "$signing_pem" -checkend 0 -noout
+fi
+
+designated_requirement() {
+  codesign -d -r- "$1" 2>&1 | awk -F' => ' '/^designated => /{print $2}'
+}
 
 swift run GestureCoreChecks
 swift build -c release --product GestureKeys
@@ -48,8 +64,8 @@ with open(sys.argv[1], 'wb') as f:
         'CFBundleName': 'GestureKeys',
         'CFBundleDisplayName': 'GestureKeys',
         'CFBundlePackageType': 'APPL',
-        'CFBundleShortVersionString': '0.7.5',
-        'CFBundleVersion': '22',
+        'CFBundleShortVersionString': '0.7.6',
+        'CFBundleVersion': '23',
         'CFBundleDevelopmentRegion': 'zh-Hans',
         'CFBundleIconFile': 'GestureKeys-B2.icns',
         'LSMinimumSystemVersion': '13.0',
@@ -88,13 +104,15 @@ if [[ "$mode" == release ]]; then
   xcrun stapler validate "$APP"
   suffix=
 fi
-if [[ "$mode" == self-signed ]]; then
-  "$signer" sign -C /dev/null --pem-file "$GESTUREKEYS_SIGN_PEM" --timestamp-url none "$APP"
-  fingerprint=$(/usr/bin/openssl x509 -in "$GESTUREKEYS_SIGN_PEM" -outform der | shasum -a 1 | awk '{print $1}')
+if [[ "$mode" != release && -n "$signing_pem" ]]; then
+  "$signer" sign -C /dev/null --pem-file "$signing_pem" --timestamp-url none "$APP"
+  fingerprint=$(/usr/bin/openssl x509 -in "$signing_pem" -outform der | shasum -a 1 | awk '{print $1}')
   requirement="identifier \"local.yy.GestureKeys\" and certificate root = H\"$fingerprint\""
-  actual=$(codesign -d -r- "$APP" 2>&1 | awk -F' => ' '/^designated => /{print $2}')
+  actual=$(designated_requirement "$APP")
   [[ "$actual" == "$requirement" ]] || { echo 'Self-signed app lacks the expected certificate-based identity.' >&2; exit 1; }
   codesign --verify --strict -R "=$requirement" "$APP"
+fi
+if [[ "$mode" == self-signed ]]; then
   suffix=-self-signed
   mkdir -p dist
   staging=$(mktemp -d "$PWD/dist/.release.XXXXXX")
@@ -109,20 +127,51 @@ if [[ "$mode" != local ]]; then
   exit 0
 fi
 
-codesign --force --sign - --identifier local.yy.GestureKeys "$APP"
+if [[ -z "$signing_pem" ]]; then
+  codesign --force --sign - --identifier local.yy.GestureKeys "$APP"
+fi
 codesign --verify --strict "$APP"
 echo "Built: $APP"
-# Install local builds at a consistent path. This does not preserve permissions across ad-hoc rebuilds.
 # An empty GESTUREKEYS_INSTALL_DIR skips installation.
-INSTALL_DIR="${GESTUREKEYS_INSTALL_DIR-/Applications}"
 if [[ -n "$INSTALL_DIR" && -w "$INSTALL_DIR" ]]; then
-  swift -e 'import AppKit; for app in NSRunningApplication.runningApplications(withBundleIdentifier: "local.yy.GestureKeys") { _ = app.terminate() }' || true
-  sleep 1
+  installed="$INSTALL_DIR/GestureKeys.app"
+  if [[ -e "$installed" ]]; then
+    current_requirement=$(designated_requirement "$installed")
+    if [[ -n "$current_requirement" && "$current_requirement" != "$(designated_requirement "$APP")" ]]; then
+      echo "Installation skipped: the new build does not match the signing identity at $installed. Set GESTUREKEYS_SIGN_PEM to its signing identity." >&2
+      exit 1
+    fi
+  fi
+  staging=$(mktemp -d "$INSTALL_DIR/.gesturekeys-install.XXXXXX")
+  cleanup_install() {
+    if [[ -e "$staging/previous.app" && ! -e "$installed" ]]; then
+      mv "$staging/previous.app" "$installed" || return
+    fi
+    rm -rf "$staging"
+  }
+  trap cleanup_install EXIT
+  ditto "$APP" "$staging/GestureKeys.app"
+  codesign --verify --strict "$staging/GestureKeys.app"
+  GESTUREKEYS_INSTALLED_APP="$installed" swift -e '
+    import AppKit
+    let path = ProcessInfo.processInfo.environment["GESTUREKEYS_INSTALLED_APP"]!
+    let installed = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+    let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "local.yy.GestureKeys")
+        .filter { $0.bundleURL?.resolvingSymlinksInPath().path == installed.path }
+    apps.forEach { _ = $0.terminate() }
+    let deadline = Date().addingTimeInterval(5)
+    while apps.contains(where: { !$0.isTerminated }) && Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    if apps.contains(where: { !$0.isTerminated }) {
+        fputs("Close the installed GestureKeys before replacing it.\n", stderr)
+        exit(1)
+    }
+  '
   # Replace, never merge: an old file left behind invalidates the code signature.
-  rm -rf "$INSTALL_DIR/GestureKeys.app"
-  ditto "$APP" "$INSTALL_DIR/GestureKeys.app"
-  codesign --verify --strict "$INSTALL_DIR/GestureKeys.app"
-  touch "$INSTALL_DIR/GestureKeys.app"
-  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$INSTALL_DIR/GestureKeys.app"
-  echo "Installed: $INSTALL_DIR/GestureKeys.app"
+  if [[ -e "$installed" ]]; then mv "$installed" "$staging/previous.app"; fi
+  mv "$staging/GestureKeys.app" "$installed"
+  touch "$installed"
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$installed"
+  echo "Installed: $installed"
 fi

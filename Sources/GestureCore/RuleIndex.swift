@@ -2,14 +2,14 @@ import Foundation
 
 private struct IndexedRule: Sendable {
     let rule: Rule
-    let template: Shape.Template?
+    let templates: [Shape.Template]
 
     init?(_ rule: Rule) {
         guard rule.enabled else { return nil }
         let points = rule.kind == .gesture ? Shape.normalize(rule.points) : nil
         guard rule.validationError(gestureIsValid: points != nil) == nil else { return nil }
         self.rule = rule
-        self.template = points.map { Shape.Template(rule: rule, normalized: $0) }
+        self.templates = points.map { Shape.templates(rule: rule, normalized: $0) } ?? []
     }
 }
 
@@ -22,8 +22,8 @@ public struct MouseBindings: Sendable {
 
     fileprivate mutating func append(_ entry: IndexedRule) {
         count += 1
-        if let template = entry.template {
-            templates.append(template)
+        if !entry.templates.isEmpty {
+            templates.append(contentsOf: entry.templates)
         } else if entry.rule.clickCount == 2 {
             if doubleClick == nil { doubleClick = entry.rule }
         } else if singleClick == nil {

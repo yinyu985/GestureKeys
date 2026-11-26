@@ -9,12 +9,19 @@ public struct StrokePoint: Codable, Equatable, Sendable {
 
 public struct Shortcut: Codable, Equatable, Hashable, Sendable {
     public static let mask: UInt64 = 0x1e0000 // Shift, Control, Option, Command; exclude device bits.
+    /// Only recorded outputs carry physical modifier key codes, in press order.
+    public var physicalModifiers: [UInt16]?
     public var keyCode: UInt16
     public var modifiers: UInt64
     public init(_ keyCode: UInt16 = 0, _ modifiers: UInt64 = 0) {
         self.keyCode = keyCode; self.modifiers = modifiers & Self.mask
     }
     public var display: String {
+        if let keys = physicalModifiers, !keys.isEmpty {
+            let names = keys.compactMap { Self.sides[$0]?.label }
+            let main = keys.contains(keyCode) ? [] : [Shortcut(keyCode).display]
+            return (names + main).joined(separator: " + ")
+        }
         var s = ""
         for (bit, symbol) in [(UInt64(0x40000), "⌃"), (0x80000, "⌥"), (0x20000, "⇧"), (0x100000, "⌘")] {
             if modifiers & bit != 0 { s += symbol }
@@ -301,6 +308,7 @@ public struct Configuration: Codable, Equatable, Sendable {
         guard (storedTrailStyle ?? TrailStyle()).isValid else { throw ConfigError.invalid(L10n.text("轨迹颜色或粗细无效。")) }
         for rule in rules {
             guard rule.points.count <= 4096, rule.points.allSatisfy({ $0.x.isFinite && $0.y.isFinite }),
+                  rule.triggerKey?.physicalModifiers == nil, rule.outputKey?.validPhysicalOutput != false,
                   (rule.triggerKey?.modifiers ?? 0) & ~Shortcut.mask == 0,
                   (rule.outputKey?.modifiers ?? 0) & ~Shortcut.mask == 0 else {
                 throw ConfigError.invalid(L10n.text("配置中包含无效轨迹或修饰键。"))

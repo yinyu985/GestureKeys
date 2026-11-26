@@ -2,16 +2,41 @@ import Foundation
 
 public enum ShapePreset: String, CaseIterable, Identifiable {
     case upRight = "↗", upLeft = "↖", right = "→", left = "←", up = "↑", down = "↓"
+    case downLeft = "↙", downRight = "↘"
+    case upThenRight = "┌", upThenLeft = "┐", rightThenDown = "→↓", leftThenDown = "←↓"
+    case check = "✓", caret = "∧", circle = "O"
     case v = "V", c = "C", l = "L", b = "B", w = "W"
     case two = "2", six = "6", seven = "7", less = "<", greater = ">"
     public var id: String { rawValue }
-    public static let editorOptions: [Self] = [.up, .down, .upRight, .upLeft, .c, .v, .l, .two, .six, .seven, .less, .greater]
+    // Retired presets remain readable in saved rules.
+    public static let editorOptions: [Self] = [
+        .up, .down,
+        .left, .right,
+        .upLeft, .upRight,
+        .downLeft, .downRight,
+        .circle, // The picker shows both directions in this row.
+        .upThenLeft, .upThenRight,
+        .leftThenDown, .rightThenDown,
+        .v, .caret,
+        .two, .six,
+        .less, .greater,
+        .c
+    ]
     public var title: String {
         switch self {
         case .up: return L10n.text("由下往上")
         case .down: return L10n.text("由上往下")
         case .upRight: return L10n.text("从左下到右上")
         case .upLeft: return L10n.text("从右下到左上")
+        case .downLeft: return L10n.text("从右上到左下")
+        case .downRight: return L10n.text("从左上到右下")
+        case .upThenRight: return L10n.text("先上后右 ┌")
+        case .upThenLeft: return L10n.text("先上后左 ┐")
+        case .rightThenDown: return L10n.text("先右后下 ┐")
+        case .leftThenDown: return L10n.text("先左后下 ┌")
+        case .check: return L10n.text("对勾 ✓")
+        case .caret: return L10n.text("倒着的字母 V")
+        case .circle: return L10n.text("O 圆圈（双向）")
         case .right: return L10n.text("由左往右")
         case .left: return L10n.text("由右往左")
         case .two, .six, .seven: return L10n.text("数字 %1$@", "\(rawValue)")
@@ -29,6 +54,18 @@ public enum Shape {
         switch shape {
         case .upRight: return [StrokePoint(0, 100), StrokePoint(100, 0)]
         case .upLeft: return [StrokePoint(100, 100), StrokePoint(0, 0)]
+        case .downLeft: return [StrokePoint(100, 0), StrokePoint(0, 100)]
+        case .downRight: return [StrokePoint(0, 0), StrokePoint(100, 100)]
+        case .upThenRight: return [StrokePoint(0, 100), StrokePoint(0, 0), StrokePoint(100, 0)]
+        case .rightThenDown: return [StrokePoint(0, 0), StrokePoint(100, 0), StrokePoint(100, 100)]
+        case .leftThenDown: return [StrokePoint(100, 0), StrokePoint(0, 0), StrokePoint(0, 100)]
+        case .upThenLeft: return [StrokePoint(100, 100), StrokePoint(100, 0), StrokePoint(0, 0)]
+        case .check: return [StrokePoint(0, 66), StrokePoint(26, 100), StrokePoint(100, 0)]
+        case .caret: return [StrokePoint(0, 100), StrokePoint(50, 0), StrokePoint(100, 100)]
+        case .circle: return (0...48).map { i in
+            let angle = Double(i) * .pi / 24
+            return StrokePoint(50 + 50 * sin(angle), 50 - 50 * cos(angle))
+        }
         case .right: return [StrokePoint(0, 50), StrokePoint(100, 50)]
         case .left: return [StrokePoint(100, 50), StrokePoint(0, 50)]
         case .up: return [StrokePoint(50, 100), StrokePoint(50, 0)]
@@ -165,21 +202,32 @@ public enum Shape {
         public let failure: Failure?
     }
 
-    public static func recognize(_ points: [StrokePoint], rules: [Rule]) -> Match {
-        let templates = rules.compactMap { rule in
-            normalize(rule.points).map { Template(rule: rule, normalized: $0) }
+    static func templates(rule: Rule, normalized: [StrokePoint]) -> [Template] {
+        let template = Template(rule: rule, normalized: normalized)
+        switch ShapePreset(rawValue: rule.shapeName) {
+        case .circle, .v, .caret:
+            return [template, Template(rule: rule, normalized: Array(normalized.reversed()))]
+        default:
+            return [template]
         }
-        return recognize(points, templates: templates).match
+    }
+
+    public static func recognize(_ points: [StrokePoint], rules: [Rule]) -> Match {
+        let all = rules.flatMap { rule in
+            normalize(rule.points).map { Self.templates(rule: rule, normalized: $0) } ?? []
+        }
+        return recognize(points, templates: all).match
     }
 
     public static func recognize(_ points: [StrokePoint], templates: [Template]) -> Recognition {
         guard !templates.isEmpty else { return Recognition(match: .noMatch, candidates: [], failure: .noTemplates) }
         guard let candidate = normalize(points) else { return Recognition(match: .noMatch, candidates: [], failure: .invalidStroke) }
 
+        var seen = Set<UUID>()
         let ranked = templates.indices.compactMap { index -> (index: Int, score: Double)? in
             let score = distance(candidate, templates[index].normalized)
             return score.isFinite ? (index, score) : nil
-        }.sorted { $0.score < $1.score }
+        }.sorted { $0.score < $1.score }.filter { seen.insert(templates[$0.index].rule.id).inserted }
         guard let best = ranked.first else { return Recognition(match: .noMatch, candidates: [], failure: .noFiniteScores) }
         let closest = ranked.prefix(2).map { Candidate(ruleID: templates[$0.index].rule.id, distance: $0.score) }
         guard best.score < matchCutoff else { return Recognition(match: .noMatch, candidates: closest, failure: .outsideCutoff) }

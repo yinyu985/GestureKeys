@@ -340,7 +340,7 @@ final class EventEngine: @unchecked Sendable {
                 let targeted = !rule.action.isSystemShortcut
                 if !targeted {
                     let current = self.snapshot()
-                    if current.target == target && current.rules.keyboardRule(for: shortcut) != nil {
+                    if current.target == target && current.rules.keyboardRule(for: Shortcut(shortcut.keyCode, shortcut.modifiers)) != nil {
                         diagnostics.record("action.shortcut_failed", facts.merging(["reason": "would_retrigger_hotkey"]) { _, new in new })
                         DispatchQueue.main.async { [weak self] in
                             self?.onActionError?(rule, .wouldRetriggerHotkey)
@@ -349,17 +349,32 @@ final class EventEngine: @unchecked Sendable {
                     }
                 }
                 let source = CGEventSource(stateID: .privateState)
-                guard let down = CGEvent(keyboardEventSource: source, virtualKey: shortcut.keyCode, keyDown: true),
-                      let up = CGEvent(keyboardEventSource: source, virtualKey: shortcut.keyCode, keyDown: false) else {
+                let flags = Self.shortcutFlags(shortcut, system: !targeted)
+                let physical = rule.action == .shortcut ? shortcut.physicalSteps : nil
+                let steps: [Shortcut.KeyStep] = physical ?? [(shortcut.keyCode, true, false, flags.rawValue), (shortcut.keyCode, false, false, flags.rawValue)]
+                let events: [CGEvent] = steps.compactMap { step in
+                    guard let event = CGEvent(keyboardEventSource: source, virtualKey: step.key, keyDown: step.down) else { return nil }
+                    if step.modifier { event.type = .flagsChanged }
+                    let stepFlags = CGEventFlags(rawValue: step.flags)
+                    event.flags = step.modifier ? stepFlags : stepFlags.union(flags)
+                    event.setIntegerValueField(.eventSourceUserData, value: Self.marker)
+                    return event
+                }
+                guard events.count == steps.count else {
                     diagnostics.record("action.shortcut_failed", facts.merging(["reason": "event_creation_failed"]) { _, new in new }); return
                 }
-                let flags = Self.shortcutFlags(shortcut, system: !targeted)
                 guard canExecute(confirmForeground: true) else { return }
-                for event in [down, up] {
-                    event.flags = flags
-                    event.setIntegerValueField(.eventSourceUserData, value: Self.marker)
+                var pressed = Set<UInt16>(), cancelled = false
+                for (index, event) in events.enumerated() {
+                    let step = steps[index]
+                    if physical != nil && index > 0 { Thread.sleep(forTimeInterval: 0.038) }
+                    if step.down {
+                        if physical != nil && !cancelled { cancelled = !canExecute(confirmForeground: true) }
+                        guard !cancelled else { continue }; pressed.insert(step.key)
+                    } else if pressed.remove(step.key) == nil { continue }
                     self.postKey(event, targeted ? target.pid : nil)
                 }
+                guard !cancelled else { return }
                 DispatchQueue.main.async { [weak self] in self?.onAction?(rule) }
                 diagnostics.record("action.shortcut_posted", facts.merging(["shortcut": shortcut.display, "route": targeted ? "pid" : "system", "pid": String(target.pid), "event_flags": String(flags.rawValue, radix: 16)]) { _, new in new })
             }

@@ -33,6 +33,10 @@ extension GestureCoreTests {
             throw ConfigError.invalid("An ambiguous gesture must report the close pair, in score order.")
         }
 
+        let vee = Rule(kind: .gesture, points: Shape.preset(.v), shapeName: ShapePreset.v.rawValue, action: .copy)
+        guard recognize(vee.points, [vee]).candidates.map(\.ruleID) == [vee.id] else {
+            throw ConfigError.invalid("Both directions of a V must report the same candidate only once.")
+        }
         let empty = recognize(up, [])
         let short = recognize([StrokePoint(0, 0), StrokePoint(10, 0)], [exact])
         guard empty.failure == .noTemplates, short.failure == .invalidStroke,

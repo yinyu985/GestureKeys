@@ -95,14 +95,16 @@ final class EditorInputReadoutLabel: NSTextField {
 struct ShortcutRecorder: NSViewRepresentable {
     @Binding var shortcut: Shortcut?
     private let label: String
+    let physicalOutput: Bool
     let onRecording: (Bool) -> Void
-    init(shortcut: Binding<Shortcut?>, onRecording: @escaping (Bool) -> Void = { _ in }) {
-        _shortcut = shortcut; self.onRecording = onRecording
+    init(shortcut: Binding<Shortcut?>, physicalOutput: Bool = false, onRecording: @escaping (Bool) -> Void = { _ in }) {
+        self.physicalOutput = physicalOutput; _shortcut = shortcut; self.onRecording = onRecording
         // A layout change can change the label without changing the bound physical key.
         label = shortcut.wrappedValue?.display ?? L10n.text("录入")
     }
     func makeNSView(context: Context) -> RecorderButton { RecorderButton() }
     func updateNSView(_ view: RecorderButton, context: Context) {
+        view.physicalOutput = physicalOutput
         view.value = shortcut
         view.didRecord = { shortcut = $0 }
         view.recordingChanged = onRecording
@@ -114,6 +116,7 @@ struct ShortcutRecorder: NSViewRepresentable {
 final class RecorderButton: NSButton {
     private static weak var activeRecorder: RecorderButton?
     var value: Shortcut?
+    var physicalOutput = false
     var didRecord: ((Shortcut) -> Void)?
     var recordingChanged: ((Bool) -> Void)?
     private(set) var capturing = false
@@ -156,9 +159,23 @@ final class RecorderButton: NSButton {
         Self.activeRecorder = self
         diagnostics.record("shortcut.capture_started")
         capturing = true; title = L10n.text("请按键"); setAccessibilityLabel(L10n.text("正在录入快捷键，按 Esc 取消")); needsDisplay = true; recordingChanged?(true)
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+        var held: [UInt16] = [], peak: [UInt16] = []
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown, .keyUp, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
             guard let self, self.capturing else { return event }
             guard let window = self.window, event.window === window else { self.stop(); return event }
+            if event.type == .flagsChanged {
+                guard self.physicalOutput, let side = Shortcut.sides[event.keyCode] else { return event }
+                if UInt64(event.modifierFlags.rawValue) & side.device != 0 {
+                    if !held.contains(event.keyCode) { held.append(event.keyCode) }; peak = held
+                    self.title = Shortcut(physical: held)?.display ?? ""
+                } else {
+                    held.removeAll { $0 == event.keyCode }
+                    if held.isEmpty, let chord = Shortcut(physical: peak) {
+                        self.value = chord; self.didRecord?(chord); self.stop()
+                    }
+                }
+                return nil
+            }
             if event.type != .keyDown && event.type != .keyUp {
                 if !self.bounds.contains(self.convert(event.locationInWindow, from: nil)) { self.stop() }
                 return event
@@ -166,7 +183,8 @@ final class RecorderButton: NSButton {
             if event.type == .keyDown {
                 let flags = event.modifierFlags.rawValue & UInt(Shortcut.mask)
                 if event.keyCode != 53 || flags != 0 {
-                    let shortcut = Shortcut(event.keyCode, UInt64(flags))
+                    let physical = self.physicalOutput && Shortcut.flags(for: held) & Shortcut.mask == UInt64(flags)
+                    let shortcut = (physical ? Shortcut(physical: held, main: event.keyCode) : nil) ?? Shortcut(event.keyCode, UInt64(flags))
                     self.value = shortcut; self.didRecord?(shortcut)
                     diagnostics.record("shortcut.captured")
                 } else { diagnostics.record("shortcut.capture_cancelled") }

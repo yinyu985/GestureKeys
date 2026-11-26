@@ -105,6 +105,68 @@ struct ChoiceMenu<Value: Hashable>: View {
     }
 }
 
+private struct ChoiceGrid<Value: Hashable>: View {
+    @Binding var selection: Value
+    let options: [Value]
+    let title: (Value) -> String
+    @State private var expanded = false
+    var body: some View {
+        let columnWidth: CGFloat = 176
+        let columns = Array(repeating: GridItem(.fixed(columnWidth), spacing: 1), count: 2)
+        ChoiceButton(title: title(selection), width: columnWidth, expanded: $expanded) {
+            LazyVGrid(columns: columns, spacing: 1) {
+                ForEach(options, id: \.self) { option in
+                    PopupRow(title: title(option), selected: selection == option) {
+                        selection = option
+                        expanded = false
+                    }
+                }
+            }.popupSurface(width: 2 * columnWidth + 11)
+        }
+    }
+}
+
+private enum TrailPresetOption: Hashable {
+    case forward(ShapePreset)
+    case reverse(ShapePreset)
+
+    static let options = ShapePreset.editorOptions.flatMap { preset -> [Self] in
+        switch preset {
+        case .circle: return [.reverse(preset), .forward(preset)]
+        case .v, .caret: return [.forward(preset), .reverse(preset)]
+        default: return [.forward(preset)]
+        }
+    }
+
+    var preset: ShapePreset {
+        switch self {
+        case .forward(let preset), .reverse(let preset): return preset
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .reverse(.circle): return L10n.text("O 逆时针")
+        case .forward(.circle): return L10n.text("O 顺时针")
+        case .forward(.v), .forward(.caret): return L10n.text("%1$@ · 左起笔", preset.title)
+        case .reverse(.v), .reverse(.caret): return L10n.text("%1$@ · 右起笔", preset.title)
+        default: return preset.title
+        }
+    }
+
+    var points: [StrokePoint] {
+        let points = Shape.preset(preset)
+        if case .reverse = self { return Array(points.reversed()) }
+        return points
+    }
+
+    init?(rule: Rule) {
+        guard let preset = ShapePreset(rawValue: rule.shapeName) else { return nil }
+        let reversed = Self.reverse(preset)
+        self = Self.options.contains(reversed) && rule.points == reversed.points ? reversed : .forward(preset)
+    }
+}
+
 private struct ActionPages: View {
     @Binding var selection: ActionKind
     let width: CGFloat
@@ -209,7 +271,18 @@ struct RuleEditor: View {
                         EditorField(label: L10n.text("执行动作")) { ActionPages(selection: $rule.action, width: controlWidth) }
                         if rule.action == .shortcut {
                             DividerLine().padding(.vertical, 3)
-                            EditorField(label: L10n.text("发送快捷键")) { ShortcutRecorder(shortcut: $rule.outputKey).frame(width: controlWidth, height: 27) }
+                            EditorField(label: L10n.text("发送快捷键")) {
+                                ShortcutRecorder(shortcut: $rule.outputKey, physicalOutput: true).frame(width: controlWidth, height: 27)
+                                    .contextMenu {
+                                        ForEach([UInt16(58), 61], id: \.self) { option in
+                                            ForEach([UInt16(55), 54], id: \.self) { command in
+                                                if let chord = Shortcut(physical: [option, command]) {
+                                                    Button(chord.display) { rule.outputKey = chord }
+                                                }
+                                            }
+                                        }
+                                    }
+                            }
                         } else if rule.action == .openApplication {
                             DividerLine().padding(.vertical, 3)
                             EditorField(label: L10n.text("打开")) {
@@ -290,11 +363,12 @@ struct RuleEditor: View {
         if rule.action == .redo { return L10n.text("恢复刚撤销的操作。") }
         return nil
     }
-    private var trailPreset: Binding<ShapePreset?> {
-        Binding(get: { ShapePreset(rawValue: rule.shapeName) }, set: { selection in
+    private var trailPreset: Binding<TrailPresetOption?> {
+        Binding(get: { TrailPresetOption(rule: rule) }, set: { selection in
             guard let selection else { return }
-            rule.points = Shape.preset(selection); rule.shapeName = selection.rawValue
-            diagnostics.record("rule.gesture_preset_selected", ["rule": rule.id.uuidString, "preset": selection.rawValue])
+            rule.points = selection.points
+            rule.shapeName = selection.preset.rawValue
+            diagnostics.record("rule.gesture_preset_selected", ["rule": rule.id.uuidString, "preset": rule.shapeName])
         })
     }
     private var track: some View {
@@ -302,7 +376,7 @@ struct RuleEditor: View {
             HStack(spacing: 6) {
                 sectionTitle(L10n.text("轨迹"))
                 Spacer()
-                ChoiceMenu(selection: trailPreset, options: ShapePreset.editorOptions.map(Optional.some), width: 144) {
+                ChoiceGrid(selection: trailPreset, options: TrailPresetOption.options.map(Optional.some)) {
                     $0?.title ?? (rule.points.isEmpty ? L10n.text("预设轨迹") : L10n.text("手绘轨迹"))
                 }
                 Button(L10n.text("清空")) {
