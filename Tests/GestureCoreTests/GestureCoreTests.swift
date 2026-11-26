@@ -157,17 +157,27 @@ final class GestureCoreTests {
         }
     }
     func testCornerDirections() {
-        let rules = ShapePreset.editorOptions.map { Rule(name: $0.rawValue, kind: .gesture, points: Shape.preset($0)) }
+        let rules = ShapePreset.editorOptions.map {
+            Rule(name: $0.rawValue, kind: .gesture, points: Shape.preset($0), shapeName: $0.rawValue)
+        }
+        let hookedCorner: [StrokePoint] = [.init(0, 0), .init(50, 6), .init(103, 32), .init(55, 106)]
         let strokes: [(ShapePreset, [StrokePoint])] = [
             (.upThenRight, [.init(8, 95), .init(4, 50), .init(9, 6), .init(55, 4), .init(95, 8)]),
             (.upThenLeft, [.init(94, 97), .init(90, 52), .init(93, 6), .init(50, 8), .init(7, 4)]),
             (.rightThenDown, [.init(4, 9), .init(52, 6), .init(93, 11), .init(96, 52), .init(91, 96)]),
-            (.leftThenDown, [.init(95, 6), .init(52, 9), .init(8, 4), .init(5, 55), .init(9, 97)])
+            (.leftThenDown, [.init(95, 6), .init(52, 9), .init(8, 4), .init(5, 55), .init(9, 97)]),
+            (.upThenLeft, [.init(160, 95), .init(158, 40), .init(17, 38)]),
+            (.rightThenDown, [.init(45, 75), .init(185, 75), .init(184, 135)]),
+            (.rightThenDown, hookedCorner),
+            (.greater, [.init(55, 75), .init(145, 125), .init(55, 175)]),
+            (.right, [.init(9, 15), .init(55, 16), .init(120, 22)])
         ]
         for (preset, points) in strokes {
             guard case let .matched(id, _) = Shape.recognize(points, rules: rules) else { XCTFail("Missed \(preset)") }
             XCTAssertEqual(rules.first { $0.id == id }?.name, preset.rawValue)
         }
+        let forwardAndReverseCorner = rules.filter { [ShapePreset.greater.rawValue, ShapePreset.upThenLeft.rawValue].contains($0.shapeName) }
+        XCTAssertEqual(Shape.recognize(hookedCorner, rules: forwardAndReverseCorner), .noMatch)
     }
     func testCircleDirections() {
         let rules = ShapePreset.editorOptions.map {

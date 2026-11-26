@@ -84,6 +84,7 @@
 "所有应用" = "All Apps";
 "手势" = "Gesture";
 "手势录制区域。按住鼠标绘制轨迹。" = "Gesture canvas. Hold a mouse button to draw.";
+"实心点是起点，箭头是终点。" = "The solid dot marks the start. The arrow marks the end.";
 "手绘轨迹" = "Freehand Gesture";
 "打开" = "Open";
 "打开应用" = "Open App";

@@ -205,7 +205,7 @@ struct RuleRow: View {
                     HStack(spacing: 12) {
                         Text(button).frame(width: 63, alignment: .leading)
                         if rule.kind == .gesture {
-                            GestureThumbnail(points: rule.points).accessibilityHidden(true)
+                            GestureThumbnail(points: rule.points)
                         } else {
                             Text(detail).frame(width: 50).foregroundStyle(Ink.secondary)
                         }
@@ -249,31 +249,21 @@ struct RuleRow: View {
     }
 }
 
-private struct GestureThumbnail: View {
-    let points: [StrokePoint]
-    var body: some View {
-        Canvas { context, size in
-            let fitted = Shape.thumbnail(points, width: size.width, height: size.height, padding: 5, maxWidthToHeightRatio: 2)
-            guard let first = fitted.first else { return }
-            var path = Path(); path.move(to: CGPoint(x: first.x, y: first.y))
-            for point in fitted.dropFirst() { path.addLine(to: CGPoint(x: point.x, y: point.y)) }
-            context.stroke(path, with: .color(Ink.accentText), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
-            context.fill(Path(ellipseIn: CGRect(x: first.x - 1.5, y: first.y - 1.5, width: 3, height: 3)), with: .color(Ink.accentText))
-        }.frame(width: 48, height: 24)
-
-    }
-}
-
 struct PromptPanel: View {
     let prompt: AppPrompt
     @Environment(\.dismiss) private var dismiss
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: prompt.destructive ? 8 : 12) {
             Label(prompt.title, systemImage: prompt.destructive ? "trash" : prompt.confirm == nil ? "info.circle" : "exclamationmark.circle")
-                .font(.system(size: 17, weight: .semibold)).foregroundStyle(prompt.destructive ? Ink.danger : Ink.primary)
+                .font(.system(size: prompt.destructive ? 15 : 17, weight: .semibold)).foregroundStyle(prompt.destructive ? Ink.danger : Ink.primary)
             if !prompt.detail.isEmpty {
-                ScrollView { Text(prompt.detail).font(.system(size: 12)).foregroundStyle(Ink.secondary).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }
-                    .scrollIndicators(.never).frame(minHeight: 24, idealHeight: 46, maxHeight: 120)
+                if prompt.destructive {
+                    Text(prompt.detail).font(.system(size: 12)).foregroundStyle(Ink.secondary)
+                        .lineLimit(3).fixedSize(horizontal: false, vertical: true).help(prompt.detail)
+                } else {
+                    ScrollView { Text(prompt.detail).font(.system(size: 12)).foregroundStyle(Ink.secondary).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }
+                        .scrollIndicators(.never).frame(minHeight: 24, idealHeight: 46, maxHeight: 120)
+                }
             }
             HStack(spacing: 8) {
                 Spacer()
@@ -284,7 +274,9 @@ struct PromptPanel: View {
                 }.buttonStyle(QuietButton(prominent: !prompt.destructive, destructive: prompt.destructive))
                     .keyboardShortcut(prompt.destructive ? KeyboardShortcut("\r", modifiers: [.command]) : .defaultAction)
             }
-        }.padding(18).frame(width: 360).fixedSize(horizontal: false, vertical: true)
+        }.padding(.horizontal, prompt.destructive ? 14 : 18)
+            .padding(.vertical, prompt.destructive ? 12 : 18)
+            .frame(width: prompt.destructive ? 264 : 360).fixedSize(horizontal: false, vertical: true)
             .background(Ink.sidebar).foregroundStyle(Ink.primary)
     }
 }

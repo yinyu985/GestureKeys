@@ -211,6 +211,69 @@ extension TrailStyle {
     var nsColor: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: 1) }
 }
 
+private struct StrokePreview {
+    let start: CGPoint
+    let line: CGPath
+    let arrow: CGPath?
+
+    init?(_ points: [StrokePoint], arrowLength: Double?) {
+        guard let first = points.first else { return nil }
+        start = CGPoint(x: first.x, y: first.y)
+        var visible = points
+        if let arrowLength, points.count > 2, let last = points.last, last.distance(to: first) < arrowLength * 0.5 {
+            // Leave a small gap between the start dot and the arrow on a closed loop.
+            var inset = arrowLength * 0.7
+            while visible.count > 1 {
+                let end = visible.removeLast()
+                let previous = visible[visible.count - 1]
+                let length = end.distance(to: previous)
+                if length > inset {
+                    let fraction = inset / length
+                    visible.append(StrokePoint(end.x + (previous.x - end.x) * fraction,
+                                               end.y + (previous.y - end.y) * fraction))
+                    break
+                }
+                inset -= length
+            }
+        }
+        let path = CGMutablePath()
+        path.move(to: start)
+        for point in visible.dropFirst() { path.addLine(to: CGPoint(x: point.x, y: point.y)) }
+        line = path
+
+        guard let arrowLength, visible.count > 1, let tip = visible.last else { arrow = nil; return }
+        let previous = visible.dropLast().last(where: { $0.distance(to: tip) >= arrowLength * 0.75 }) ?? first
+        let distance = tip.distance(to: previous)
+        guard distance > 0 else { arrow = nil; return }
+        let length = min(arrowLength, distance)
+        let dx = (tip.x - previous.x) / distance, dy = (tip.y - previous.y) / distance
+        let base = CGPoint(x: tip.x - dx * length, y: tip.y - dy * length)
+        let spread = length * 0.55
+        let head = CGMutablePath()
+        head.move(to: CGPoint(x: base.x - dy * spread, y: base.y + dx * spread))
+        head.addLine(to: CGPoint(x: tip.x, y: tip.y))
+        head.addLine(to: CGPoint(x: base.x + dy * spread, y: base.y - dx * spread))
+        arrow = head
+    }
+}
+
+struct GestureThumbnail: View {
+    let points: [StrokePoint]
+    var width: CGFloat = 48
+    var body: some View {
+        Canvas { context, size in
+            let fitted = Shape.thumbnail(points, width: size.width, height: size.height, padding: 4, maxWidthToHeightRatio: 2)
+            guard let preview = StrokePreview(fitted, arrowLength: 4) else { return }
+            let color = GraphicsContext.Shading.color(Ink.accentText)
+            let style = StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round)
+            context.stroke(Path(preview.line), with: color, style: style)
+            if let arrow = preview.arrow { context.stroke(Path(arrow), with: color, style: style) }
+            let start = preview.start
+            context.fill(Path(ellipseIn: CGRect(x: start.x - 1.5, y: start.y - 1.5, width: 3, height: 3)), with: color)
+        }.frame(width: width, height: 24).accessibilityHidden(true)
+    }
+}
+
 struct StrokeCanvas: NSViewRepresentable {
     var points: [StrokePoint]
     var preset: ShapePreset?
@@ -234,6 +297,7 @@ final class StrokeCanvasView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame); setAccessibilityElement(true)
         setAccessibilityLabel(L10n.text("手势录制区域。按住鼠标绘制轨迹。"))
+        setAccessibilityHelp(L10n.text("实心点是起点，箭头是终点。"))
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     private func point(_ event: NSEvent) -> StrokePoint {
@@ -281,18 +345,24 @@ final class StrokeCanvasView: NSView {
             }
         }
         NSColor.separatorColor.withAlphaComponent(0.38).setFill(); dots.fill()
-        let display = displayedPoints
-        if let first = display.first {
-            let path = NSBezierPath(); path.move(to: NSPoint(x: first.x, y: first.y))
-            for p in display.dropFirst() { path.line(to: NSPoint(x: p.x, y: p.y)) }
-            path.lineWidth = style.width; path.lineCapStyle = .round; path.lineJoinStyle = .round
-            style.nsColor.setStroke(); path.stroke()
-            style.nsColor.setFill(); NSBezierPath(ovalIn: NSRect(x: first.x - 5, y: first.y - 5, width: 10, height: 10)).fill()
-            if let last = display.last {
-                NSColor.controlBackgroundColor.setFill(); NSBezierPath(ovalIn: NSRect(x: last.x - 4, y: last.y - 4, width: 8, height: 8)).fill()
-                style.nsColor.setStroke(); NSBezierPath(ovalIn: NSRect(x: last.x - 4, y: last.y - 4, width: 8, height: 8)).stroke()
-            }
+        let arrowLength = livePoints == nil ? max(9, style.width * 1.2 + 3) : nil
+        guard let preview = StrokePreview(displayedPoints, arrowLength: arrowLength),
+              let context = NSGraphicsContext.current?.cgContext else { return }
+        context.saveGState()
+        defer { context.restoreGState() }
+        let color = style.nsColor.cgColor
+        context.setStrokeColor(color); context.setFillColor(color)
+        context.setLineCap(.round); context.setLineJoin(.round)
+        context.setLineWidth(style.width)
+        context.addPath(preview.line); context.strokePath()
+        if let arrow = preview.arrow {
+            context.setLineWidth(min(style.width, 3))
+            context.addPath(arrow); context.strokePath()
         }
+        let startRadius = max(5, style.width / 2 + 1)
+        let start = preview.start
+        context.fillEllipse(in: CGRect(x: start.x - startRadius, y: start.y - startRadius,
+                                       width: startRadius * 2, height: startRadius * 2))
     }
 }
 

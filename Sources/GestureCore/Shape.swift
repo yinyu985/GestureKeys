@@ -207,6 +207,12 @@ public enum Shape {
         switch ShapePreset(rawValue: rule.shapeName) {
         case .circle, .v, .caret:
             return [template, Template(rule: rule, normalized: Array(normalized.reversed()))]
+        case .upThenLeft, .upThenRight, .leftThenDown, .rightThenDown:
+            // A right angle can have unequal legs. Keep their order and directions.
+            return [template] + [0.55, 1.8].compactMap { widthScale in
+                let points = rule.points.map { StrokePoint($0.x * widthScale, $0.y) }
+                return normalize(points).map { Template(rule: rule, normalized: $0) }
+            }
         default:
             return [template]
         }
@@ -221,11 +227,34 @@ public enum Shape {
 
     public static func recognize(_ points: [StrokePoint], templates: [Template]) -> Recognition {
         guard !templates.isEmpty else { return Recognition(match: .noMatch, candidates: [], failure: .noTemplates) }
-        guard let candidate = normalize(points) else { return Recognition(match: .noMatch, candidates: [], failure: .invalidStroke) }
+        guard let candidate = normalize(points), let start = candidate.first, let end = candidate.last else {
+            return Recognition(match: .noMatch, candidates: [], failure: .invalidStroke)
+        }
+        let dx = end.x - start.x, dy = end.y - start.y
+        let chord = hypot(dx, dy)
+        let maxDeviation = candidate.map { abs(dx * ($0.y - start.y) - dy * ($0.x - start.x)) }.max() ?? 0
+        let isStraight = chord > 0.1 && maxDeviation < 0.18 * chord * chord
+        let rightmost = candidate.map(\.x).max() ?? start.x
+        let leftmost = candidate.map(\.x).min() ?? start.x
+        // Chevron strokes need two horizontal legs. A small hook at the end of a corner is insufficient.
+        let rightReturn = rightmost - max(start.x, end.x)
+        let leftReturn = min(start.x, end.x) - leftmost
 
         var seen = Set<UUID>()
         let ranked = templates.indices.compactMap { index -> (index: Int, score: Double)? in
-            let score = distance(candidate, templates[index].normalized)
+            let template = templates[index]
+            switch ShapePreset(rawValue: template.rule.shapeName) {
+            case .up, .down, .left, .right, .upLeft, .upRight, .downLeft, .downRight:
+                guard isStraight else { return nil }
+            case .upThenLeft, .upThenRight, .leftThenDown, .rightThenDown:
+                guard !isStraight else { return nil }
+            case .greater:
+                guard rightReturn >= 0.5 * (rightmost - min(start.x, end.x)), rightReturn >= 0.25 * abs(dy) else { return nil }
+            case .less:
+                guard leftReturn >= 0.5 * (max(start.x, end.x) - leftmost), leftReturn >= 0.25 * abs(dy) else { return nil }
+            default: break
+            }
+            let score = distance(candidate, template.normalized)
             return score.isFinite ? (index, score) : nil
         }.sorted { $0.score < $1.score }.filter { seen.insert(templates[$0.index].rule.id).inserted }
         guard let best = ranked.first else { return Recognition(match: .noMatch, candidates: [], failure: .noFiniteScores) }

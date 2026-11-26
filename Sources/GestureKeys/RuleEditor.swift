@@ -25,6 +25,7 @@ struct EditorField<Content: View>: View {
 struct PopupRow: View {
     let title: String
     var icon: String? = nil
+    var trail: [StrokePoint]? = nil
     var selected = false
     var showsCheckmark = true
     var destructive = false
@@ -34,6 +35,7 @@ struct PopupRow: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 if let icon { Image(systemName: icon).frame(width: 14).accessibilityHidden(true) }
+                if let trail { GestureThumbnail(points: trail, width: 30) }
                 Text(title).lineLimit(1)
                 Spacer(minLength: 4)
                 if selected && showsCheckmark { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).accessibilityHidden(true) }
@@ -105,18 +107,17 @@ struct ChoiceMenu<Value: Hashable>: View {
     }
 }
 
-private struct ChoiceGrid<Value: Hashable>: View {
-    @Binding var selection: Value
-    let options: [Value]
-    let title: (Value) -> String
+private struct TrailPresetPicker: View {
+    @Binding var selection: TrailPresetOption?
+    let placeholder: String
     @State private var expanded = false
     var body: some View {
-        let columnWidth: CGFloat = 176
+        let columnWidth: CGFloat = 196
         let columns = Array(repeating: GridItem(.fixed(columnWidth), spacing: 1), count: 2)
-        ChoiceButton(title: title(selection), width: columnWidth, expanded: $expanded) {
+        ChoiceButton(title: selection?.title ?? placeholder, width: 176, expanded: $expanded) {
             LazyVGrid(columns: columns, spacing: 1) {
-                ForEach(options, id: \.self) { option in
-                    PopupRow(title: title(option), selected: selection == option) {
+                ForEach(TrailPresetOption.options, id: \.self) { option in
+                    PopupRow(title: option.title, trail: option.points, selected: selection == option) {
                         selection = option
                         expanded = false
                     }
@@ -376,9 +377,8 @@ struct RuleEditor: View {
             HStack(spacing: 6) {
                 sectionTitle(L10n.text("轨迹"))
                 Spacer()
-                ChoiceGrid(selection: trailPreset, options: TrailPresetOption.options.map(Optional.some)) {
-                    $0?.title ?? (rule.points.isEmpty ? L10n.text("预设轨迹") : L10n.text("手绘轨迹"))
-                }
+                TrailPresetPicker(selection: trailPreset,
+                                  placeholder: rule.points.isEmpty ? L10n.text("预设轨迹") : L10n.text("手绘轨迹"))
                 Button(L10n.text("清空")) {
                     rule.points = []; rule.shapeName = ""
                     diagnostics.record("rule.gesture_cleared", ["rule": rule.id.uuidString])
