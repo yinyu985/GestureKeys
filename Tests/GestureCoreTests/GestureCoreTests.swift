@@ -32,7 +32,7 @@ struct CoreChecks {
             ("thumbnail fits wide, tall and custom strokes", suite.testThumbnail),
             ("direction discrimination", suite.testDirectionsRemainDistinct),
             ("all preset shapes", suite.testPresetsRecognizeWithoutCrossMatches),
-            ("one circle answers to either direction", suite.testCircleDirections),
+            ("circle direction is independent of the starting point", suite.testCircleDirections),
             ("V presets accept either starting side", suite.testVDirections),
             ("four corner orders stay distinct", suite.testCornerDirections),
             ("noisy V", suite.testJitteredVMatchesV),
@@ -180,28 +180,45 @@ final class GestureCoreTests {
         XCTAssertEqual(Shape.recognize(hookedCorner, rules: forwardAndReverseCorner), .noMatch)
     }
     func testCircleDirections() {
-        let rules = ShapePreset.editorOptions.map {
+        let otherRules = ShapePreset.editorOptions.filter { $0 != .circle }.map {
             Rule(name: $0.rawValue, kind: .gesture, points: Shape.preset($0), shapeName: $0.rawValue, action: .block)
         }
-        let circleIndex = rules.firstIndex { $0.shapeName == ShapePreset.circle.rawValue }!
-        let ovals = [1.0, -1.0].map { direction in
-            let oval = (0...32).map { i in
-                let angle = 0.35 + direction * Double(i) * .pi / 16
+        let circle = Shape.preset(.circle)
+        let clockwise = Rule(name: "Clockwise", kind: .gesture, points: circle, shapeName: "O", action: .block)
+        let counterclockwise = Rule(name: "Counterclockwise", kind: .gesture, points: Array(circle.reversed()), shapeName: "O", action: .block)
+        let index = RuleIndex(otherRules + [clockwise, counterclockwise])
+        XCTAssertFalse(index.hasConflicts)
+        XCTAssertTrue(RuleResolver.conflicts([clockwise, counterclockwise]).isEmpty)
+        XCTAssertEqual(Shape.circleDirection(of: clockwise.points), .clockwise)
+        XCTAssertEqual(Shape.circleDirection(of: counterclockwise.points), .counterclockwise)
+
+        func oval(direction: Double, start: Double, fraction: Double = 1) -> [StrokePoint] {
+            (0...40).map { i in
+                let angle = start + direction * fraction * Double(i) * .pi / 20
                 return StrokePoint(180 + 45 * sin(angle), 240 - 55 * cos(angle))
             }
-            return oval
         }
-        let clockwise = rules[circleIndex].points
-        for preview in [clockwise, Array(clockwise.reversed())] {
-            var saved = rules
-            saved[circleIndex].points = preview
-            let templates = RuleIndex(saved).scoped(to: "").mouseBindings(for: 1).templates
-            for oval in ovals {
-                guard case let .matched(id, _) = Shape.recognize(oval, templates: templates).match else { XCTFail("Missed circle") }
-                XCTAssertEqual(id, saved[circleIndex].id)
+        let templates = index.scoped(to: "").mouseBindings(for: 1).templates
+        for (direction, expected, opposite) in [(1.0, clockwise, counterclockwise), (-1.0, counterclockwise, clockwise)] {
+            for start in [0.0, 0.35, .pi / 2, .pi, 4.8] {
+                for fraction in [0.94, 1, 1.06] {
+                    let stroke = oval(direction: direction, start: start, fraction: fraction)
+                    guard case let .matched(id, _) = Shape.recognize(stroke, templates: templates).match else { XCTFail("Missed circle") }
+                    XCTAssertEqual(id, expected.id)
+                    XCTAssertEqual(Shape.recognize(stroke, rules: otherRules + [opposite]), .noMatch)
+                }
             }
+            XCTAssertEqual(Shape.recognize(oval(direction: direction, start: 0, fraction: 0.73), rules: [expected]), .noMatch)
         }
-        let custom = Rule(name: "Freehand", kind: .gesture, points: Shape.preset(.circle), action: .block)
+
+        var local = clockwise
+        local.id = UUID(); local.bundleID = "test.editor"
+        local.points = oval(direction: 1, start: .pi)
+        XCTAssertTrue(RuleResolver.sameTrigger(clockwise, local))
+        XCTAssertEqual(Set(RuleIndex([clockwise, counterclockwise, local]).scoped(to: local.bundleID)
+            .mouseBindings(for: 1).templates.map(\.rule.id)), Set([local.id, counterclockwise.id]))
+        let custom = Rule(name: "Freehand", kind: .gesture, points: circle, action: .block)
+        XCTAssertEqual(Shape.recognize(circle, rules: otherRules + [custom]), .matched(custom.id, 0))
         XCTAssertEqual(Shape.recognize(Array(custom.points.reversed()), rules: [custom]), .noMatch)
     }
     func testVDirections() {
@@ -530,10 +547,34 @@ final class GestureCoreTests {
         XCTAssertNil(config.storedAppearance)
     }
     func testPreferences() throws {
+        let oldTrail = Data(#"{"red":0.2,"green":0.4,"blue":0.8,"width":8}"#.utf8)
+        let previous = try JSONDecoder().decode(TrailStyle.self, from: oldTrail)
+        XCTAssertEqual(previous.effect, .line)
+        XCTAssertEqual(previous.width, 8)
+        XCTAssertEqual(previous.tint, TrailTint(0.2, 0.4, 0.8))
+        var styled = Configuration.defaults
+        styled.trailStyle = previous
+        for effect in TrailEffect.allCases {
+            styled.trailStyle.effect = effect
+            let saved = try JSONDecoder().decode(Configuration.self, from: ConfigStorage.encode(styled))
+            XCTAssertEqual(saved.trailStyle.effect, effect)
+            XCTAssertEqual(saved.trailStyle.width, 5)
+        }
+        styled.trailStyle.effect = .petals
+        styled.trailStyle.tint = TrailTint(0.9, 0.23, 0.5)
+        styled.trailStyle.effect = .dots
+        XCTAssertFalse(styled.trailStyle.tint == TrailTint(0.9, 0.23, 0.5))
+        styled.trailStyle.effect = .line
+        XCTAssertEqual(styled.trailStyle.tint, previous.tint)
+        let saved = try JSONDecoder().decode(Configuration.self, from: ConfigStorage.encode(styled))
+        styled = saved
+        styled.trailStyle.effect = .petals
+        XCTAssertEqual(styled.trailStyle.tint, TrailTint(0.9, 0.23, 0.5))
+
         var legacy = Configuration.defaults
         legacy.trailStyle.width = 12
         let decoded = try JSONDecoder().decode(Configuration.self, from: ConfigStorage.encode(legacy))
-        XCTAssertEqual(decoded.trailStyle.width, 10)
+        XCTAssertEqual(decoded.trailStyle.width, 5)
         XCTAssertEqual(decoded.iconLocation, .menuBar)
         legacy.trailStyle.width = 13
         XCTAssertNil(try? legacy.validate())

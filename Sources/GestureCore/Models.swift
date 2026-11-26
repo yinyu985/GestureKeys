@@ -246,12 +246,69 @@ public struct Rule: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public enum TrailEffect: String, CaseIterable, Sendable {
+    case line, petals, squares, dots, meteor
+
+    public var title: String {
+        switch self {
+        case .line: return L10n.text("直线")
+        case .petals: return L10n.text("花瓣")
+        case .squares: return L10n.text("方块")
+        case .dots: return L10n.text("点点")
+        case .meteor: return L10n.text("流星")
+        }
+    }
+}
+
+public struct TrailTint: Codable, Equatable, Sendable {
+    public let red: Double, green: Double, blue: Double
+
+    public init(_ red: Double, _ green: Double, _ blue: Double) {
+        self.red = red; self.green = green; self.blue = blue
+    }
+
+    fileprivate var isValid: Bool { [red, green, blue].allSatisfy { (0...1).contains($0) } }
+}
+
 public struct TrailStyle: Codable, Equatable, Sendable {
-    public static let widthRange = 1.0...10.0
+    public static let widthRange = 1.0...5.0
     public var red = 0.478, green = 0.654, blue = 1.0, width = 3.0
+    private var effectID: String?
+    private var effectTints: [String: TrailTint]?
     public init() {}
-    // Keep old files with 11–12 pt readable. Rendering uses the new limit.
-    public var isValid: Bool { [red, green, blue].allSatisfy { (0...1).contains($0) } && (1...12).contains(width) }
+
+    public var effect: TrailEffect {
+        get { effectID.flatMap(TrailEffect.init(rawValue:)) ?? .line }
+        set { effectID = newValue == .line ? nil : newValue.rawValue }
+    }
+
+    public var tint: TrailTint {
+        get {
+            if let saved = effectTints?[effect.rawValue], effect != .line { return saved }
+            switch effect {
+            case .line: return TrailTint(red, green, blue)
+            case .petals: return TrailTint(0.98, 0.43, 0.65)
+            case .squares: return TrailTint(0.64, 0.49, 0.93)
+            case .dots: return TrailTint(0.26, 0.84, 0.75)
+            case .meteor: return TrailTint(1, 0.54, 0.29)
+            }
+        }
+        set {
+            if effect == .line {
+                red = newValue.red; green = newValue.green; blue = newValue.blue
+            } else {
+                var saved = effectTints ?? [:]
+                saved[effect.rawValue] = newValue
+                effectTints = saved
+            }
+        }
+    }
+
+    // Older files can store up to 12 pt. Configuration clamps them to the current range.
+    public var isValid: Bool {
+        TrailTint(red, green, blue).isValid && (1...12).contains(width) &&
+            (effectTints?.values.allSatisfy(\.isValid) ?? true)
+    }
 }
 
 public enum IconLocation: String, Codable, CaseIterable, Sendable {
@@ -367,7 +424,15 @@ public enum RuleResolver {
         switch a.kind {
         case .keyboard: return a.triggerKey == b.triggerKey
         case .click: return a.mouseButton == b.mouseButton && a.clickCount == b.clickCount
-        case .gesture: return a.mouseButton == b.mouseButton && (a.points == b.points || ShapePreset.allCases.contains { $0.rawValue == a.shapeName && $0.rawValue == b.shapeName })
+        case .gesture:
+            guard a.mouseButton == b.mouseButton else { return false }
+            if a.points == b.points { return true }
+            guard a.shapeName == b.shapeName, let preset = ShapePreset(rawValue: a.shapeName) else { return false }
+            if preset == .circle {
+                guard let direction = Shape.circleDirection(of: a.points) else { return false }
+                return direction == Shape.circleDirection(of: b.points)
+            }
+            return true
         }
     }
     public static func conflicts(_ rules: [Rule]) -> [String] {

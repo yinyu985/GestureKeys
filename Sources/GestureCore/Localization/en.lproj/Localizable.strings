@@ -20,7 +20,7 @@
 "先上后左 ┐" = "Up then left ┐";
 "先右后下 ┐" = "Right then down ┐";
 "先左后下 ┌" = "Left then down ┌";
-"O 圆圈（双向）" = "O (both directions)";
+"O 圆圈" = "O Circle";
 "O 逆时针" = "O Counterclockwise";
 "O 顺时针" = "O Clockwise";
 "从右下到左上" = "Diagonal Up Left";
@@ -188,6 +188,11 @@
 "跟随系统" = "System";
 "轨迹" = "Gesture Path";
 "轨迹样式" = "Trail Style";
+"直线" = "Line";
+"花瓣" = "Petals";
+"方块" = "Squares";
+"点点" = "Particle Dots";
+"流星" = "Meteor";
 "轨迹粗细" = "Trail Width";
 "轨迹颜色" = "Trail Color";
 "轨迹颜色或粗细无效。" = "The trail color or width is invalid.";

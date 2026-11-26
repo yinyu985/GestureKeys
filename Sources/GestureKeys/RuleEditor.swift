@@ -127,7 +127,7 @@ private struct TrailPresetPicker: View {
     }
 }
 
-private enum TrailPresetOption: Hashable {
+enum TrailPresetOption: Hashable {
     case forward(ShapePreset)
     case reverse(ShapePreset)
 
@@ -163,6 +163,10 @@ private enum TrailPresetOption: Hashable {
 
     init?(rule: Rule) {
         guard let preset = ShapePreset(rawValue: rule.shapeName) else { return nil }
+        if preset == .circle {
+            self = Shape.circleDirection(of: rule.points) == .counterclockwise ? .reverse(preset) : .forward(preset)
+            return
+        }
         let reversed = Self.reverse(preset)
         self = Self.options.contains(reversed) && rule.points == reversed.points ? reversed : .forward(preset)
     }

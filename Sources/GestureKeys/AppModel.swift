@@ -50,9 +50,9 @@ final class AppModel: ObservableObject {
                 if configuration.rules != oldValue.rules { ruleIndex = RuleIndex(configuration.rules) }
                 if configuration.iconLocation != oldValue.iconLocation { onIconLocationChanged?(configuration.iconLocation) }
                 if configuration.appearance != oldValue.appearance { Ink.apply(configuration.appearance) }
-                if !configuration.showTrail { trail.update(nil) }
+                if !configuration.showTrail || configuration.trailStyle.effect != oldValue.trailStyle.effect { trail.hide() }
                 if configuration.showTrail != oldValue.showTrail || configuration.trailStyle != oldValue.trailStyle || configuration.iconLocation != oldValue.iconLocation || configuration.appearance != oldValue.appearance {
-                    diagnostics.record("settings.changed", ["trail": String(configuration.showTrail), "trail_width": String(configuration.trailStyle.width), "icon": configuration.iconLocation.rawValue, "appearance": configuration.appearance.rawValue])
+                    diagnostics.record("settings.changed", ["trail": String(configuration.showTrail), "trail_width": String(configuration.trailStyle.width), "trail_effect": configuration.trailStyle.effect.rawValue, "icon": configuration.iconLocation.rawValue, "appearance": configuration.appearance.rawValue])
                 }
                 syncAutomaticMonitoring(); scheduleSave()
             }
@@ -151,7 +151,7 @@ final class AppModel: ObservableObject {
                 self.syncAutomaticMonitoring()
             } else {
                 self.monitorState = .idle
-                self.trail.update(nil); self.nameHUD.hide()
+                self.trail.hide(); self.nameHUD.hide()
                 if let error { self.monitorIssue = error; self.syncEngine() }
                 else { self.syncAutomaticMonitoring() }
             }
@@ -171,7 +171,9 @@ final class AppModel: ObservableObject {
         }
         engine.onTrail = { [weak self] points in
             guard let self else { return }
-            self.trail.update(self.configuration.showTrail ? points : nil, style: self.configuration.trailStyle)
+            if !self.configuration.showTrail { self.trail.hide() }
+            else if let points { self.trail.update(points, style: self.configuration.trailStyle) }
+            else { self.trail.finish() }
         }
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
@@ -220,6 +222,7 @@ final class AppModel: ObservableObject {
         let context = ["app": foreground, "pid": String(pid), "routing": reason]
         if context != loggedContext { loggedContext = context; diagnostics.record("input.context", context) }
         let update = engine.update(ruleIndex, showTrail: configuration.showTrail, frontmost: foreground, suspended: suspended, pid: pid)
+        if update.contextChanged { trail.hide() }
         let registrationChanged = update.contextChanged || running != hotKeysWereRunning
         guard registrationChanged || (retryRejected && !lastRejectedHotKeys.isEmpty) else { return }
         let scope = running && !suspended ? update.rules : .empty
@@ -474,7 +477,7 @@ final class AppModel: ObservableObject {
         if let workspaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver) }
         if let layoutObserver { DistributedNotificationCenter.default().removeObserver(layoutObserver) }
         engine.onStatus = nil
-        pendingSave?.cancel(); saveNow(); _ = hotKeys.replace(with: []); engine.stop(); trail.update(nil)
+        pendingSave?.cancel(); saveNow(); _ = hotKeys.replace(with: []); engine.stop(); trail.hide()
         diagnostics.record("app.exiting"); diagnostics.flush()
     }
 

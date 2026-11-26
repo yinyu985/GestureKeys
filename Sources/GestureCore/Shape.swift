@@ -36,7 +36,7 @@ public enum ShapePreset: String, CaseIterable, Identifiable {
         case .leftThenDown: return L10n.text("先左后下 ┌")
         case .check: return L10n.text("对勾 ✓")
         case .caret: return L10n.text("倒着的字母 V")
-        case .circle: return L10n.text("O 圆圈（双向）")
+        case .circle: return L10n.text("O 圆圈")
         case .right: return L10n.text("由左往右")
         case .left: return L10n.text("由右往左")
         case .two, .six, .seven: return L10n.text("数字 %1$@", "\(rawValue)")
@@ -50,6 +50,10 @@ public enum ShapePreset: String, CaseIterable, Identifiable {
 /// Original, direction-preserving template matcher. No rotation normalization:
 /// a leftward stroke must not become equivalent to a rightward one.
 public enum Shape {
+    public enum CircleDirection: Equatable, Sendable {
+        case clockwise, counterclockwise
+    }
+
     public static func preset(_ shape: ShapePreset) -> [StrokePoint] {
         switch shape {
         case .upRight: return [StrokePoint(0, 100), StrokePoint(100, 0)]
@@ -166,6 +170,40 @@ public enum Shape {
         return distance(lhs, rhs) < ambiguityMargin
     }
 
+    public static func circleDirection(of points: [StrokePoint]) -> CircleDirection? {
+        normalize(points).flatMap(loopDirection)
+    }
+
+    private static func loopDirection(_ points: [StrokePoint]) -> CircleDirection? {
+        guard let first = points.first, let last = points.last, first.distance(to: last) <= 0.33 else { return nil }
+        // Coordinates grow downward. Positive signed area corresponds to clockwise drawing.
+        let area = zip(points, points.dropFirst() + [first]).reduce(0.0) { sum, pair in
+            sum + pair.0.x * pair.1.y - pair.0.y * pair.1.x
+        }
+        guard abs(area) > 0.18 else { return nil }
+        return area > 0 ? .clockwise : .counterclockwise
+    }
+
+    private static func circleDistance(_ stroke: [StrokePoint], _ template: [StrokePoint]) -> Double {
+        // Drop the closing point so moving the start around the loop does not duplicate a sample.
+        let count = template.count - 1
+        var best = Double.infinity
+        for phase in 0..<count {
+            var sum = 0.0
+            for index in 0..<count {
+                let a = stroke[index], b = template[(index + phase) % count]
+                let dx = a.x - b.x, dy = a.y - b.y
+                sum += dx * dx + dy * dy
+                if sum >= best { break }
+            }
+            best = min(best, sum)
+        }
+        return sqrt(best / Double(count))
+    }
+
+    private static let clockwiseCircle = normalize(preset(.circle))!
+    private static let counterclockwiseCircle = Array(clockwiseCircle.reversed())
+
     public enum Match: Equatable, Sendable {
         case matched(UUID, Double)
         case ambiguous
@@ -175,10 +213,12 @@ public enum Shape {
     public struct Template: Sendable {
         public let rule: Rule
         let normalized: [StrokePoint]
+        let circleDirection: CircleDirection?
 
         init(rule: Rule, normalized: [StrokePoint]) {
             self.rule = rule
             self.normalized = normalized
+            circleDirection = rule.shapeName == ShapePreset.circle.rawValue ? Shape.loopDirection(normalized) : nil
         }
     }
 
@@ -205,7 +245,7 @@ public enum Shape {
     static func templates(rule: Rule, normalized: [StrokePoint]) -> [Template] {
         let template = Template(rule: rule, normalized: normalized)
         switch ShapePreset(rawValue: rule.shapeName) {
-        case .circle, .v, .caret:
+        case .v, .caret:
             return [template, Template(rule: rule, normalized: Array(normalized.reversed()))]
         case .upThenLeft, .upThenRight, .leftThenDown, .rightThenDown:
             // A right angle can have unequal legs. Keep their order and directions.
@@ -239,11 +279,18 @@ public enum Shape {
         // Chevron strokes need two horizontal legs. A small hook at the end of a corner is insufficient.
         let rightReturn = rightmost - max(start.x, end.x)
         let leftReturn = min(start.x, end.x) - leftmost
+        let circleDirection = loopDirection(candidate)
+        let isCircle = circleDirection.map { direction in
+            circleDistance(candidate, direction == .clockwise ? clockwiseCircle : counterclockwiseCircle) < matchCutoff
+        } ?? false
 
         var seen = Set<UUID>()
         let ranked = templates.indices.compactMap { index -> (index: Int, score: Double)? in
             let template = templates[index]
-            switch ShapePreset(rawValue: template.rule.shapeName) {
+            let preset = ShapePreset(rawValue: template.rule.shapeName)
+            // An unbound circle must not become an unrelated preset. Keep explicit freehand bindings eligible.
+            if isCircle, let preset, preset != .circle { return nil }
+            switch preset {
             case .up, .down, .left, .right, .upLeft, .upRight, .downLeft, .downRight:
                 guard isStraight else { return nil }
             case .upThenLeft, .upThenRight, .leftThenDown, .rightThenDown:
@@ -252,6 +299,9 @@ public enum Shape {
                 guard rightReturn >= 0.5 * (rightmost - min(start.x, end.x)), rightReturn >= 0.25 * abs(dy) else { return nil }
             case .less:
                 guard leftReturn >= 0.5 * (max(start.x, end.x) - leftmost), leftReturn >= 0.25 * abs(dy) else { return nil }
+            case .circle:
+                guard let savedDirection = template.circleDirection, savedDirection == circleDirection else { return nil }
+                return (index, circleDistance(candidate, template.normalized))
             default: break
             }
             let score = distance(candidate, template.normalized)

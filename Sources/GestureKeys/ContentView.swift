@@ -200,7 +200,7 @@ struct RuleRow: View {
                 }), onRecording: { model.recordingShortcut = $0 }).frame(width: 88, height: 24)
             } else {
                 let button = Rule.buttonName(rule.mouseButton)
-                let detail = rule.kind == .gesture ? (ShapePreset(rawValue: rule.shapeName)?.title ?? L10n.text("手绘轨迹")) : (rule.clickCount == 2 ? L10n.text("双击") : L10n.text("单击"))
+                let detail = rule.kind == .gesture ? (TrailPresetOption(rule: rule)?.title ?? L10n.text("手绘轨迹")) : (rule.clickCount == 2 ? L10n.text("双击") : L10n.text("单击"))
                 Button { model.edit(rule) } label: {
                     HStack(spacing: 12) {
                         Text(button).frame(width: 63, alignment: .leading)
@@ -292,10 +292,10 @@ struct GeneralPanel: View {
         }
     }
     private var trailColor: Binding<Color> {
-        Binding(get: { Color(nsColor: model.configuration.trailStyle.nsColor) }, set: { color in
+        Binding(get: { Color(nsColor: model.configuration.trailStyle.nsEffectColor) }, set: { color in
             guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return }
             var style = model.configuration.trailStyle
-            style.red = min(1, max(0, rgb.redComponent)); style.green = min(1, max(0, rgb.greenComponent)); style.blue = min(1, max(0, rgb.blueComponent))
+            style.tint = TrailTint(min(1, max(0, rgb.redComponent)), min(1, max(0, rgb.greenComponent)), min(1, max(0, rgb.blueComponent)))
             model.configuration.trailStyle = style
         })
     }
@@ -334,9 +334,11 @@ struct GeneralPanel: View {
                     }
                     DividerLine()
                     EditorField(label: L10n.text("轨迹样式")) {
-                        TrailSample(style: model.configuration.trailStyle).frame(width: 76, height: 30).accessibilityHidden(true)
+                        TrailSample(style: model.configuration.trailStyle).frame(width: 142, height: 46).accessibilityHidden(true)
+                        ChoiceMenu(selection: $model.configuration.trailStyle.effect, options: TrailEffect.allCases, title: \.title)
+                            .help(L10n.text("轨迹样式"))
                         ColorPicker(L10n.text("轨迹颜色"), selection: trailColor, supportsOpacity: false).labelsHidden().controlSize(.small)
-                        Slider(value: Binding(get: { model.configuration.trailStyle.width }, set: { model.configuration.trailStyle.width = $0.rounded() }), in: TrailStyle.widthRange) { Text(L10n.text("轨迹粗细")) }
+                        Slider(value: $model.configuration.trailStyle.width, in: TrailStyle.widthRange, step: 1) { Text(L10n.text("轨迹粗细")) }
                             .labelsHidden().controlSize(.small).frame(width: 102)
                         Text("\(Int(model.configuration.trailStyle.width)) pt").font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Ink.secondary).frame(width: 38, alignment: .trailing)
@@ -404,12 +406,17 @@ private struct TrailSample: View {
     var style: TrailStyle
     var body: some View {
         Canvas { context, size in
-            let inset = style.width / 2 + 3
-            let h = size.height - 2 * inset
-            var path = Path(); path.move(to: CGPoint(x: inset, y: inset + 0.70 * h))
-            path.addQuadCurve(to: CGPoint(x: size.width * 0.48, y: inset + 0.54 * h), control: CGPoint(x: size.width * 0.28, y: inset - 1))
-            path.addQuadCurve(to: CGPoint(x: size.width - inset, y: inset + 0.20 * h), control: CGPoint(x: size.width * 0.72, y: size.height - inset + 3))
-            context.stroke(path, with: .color(Color(nsColor: style.nsColor)), style: StrokeStyle(lineWidth: style.width, lineCap: .round, lineJoin: .round))
+            let zoom = 0.68
+            let width = size.width / zoom, height = size.height / zoom
+            let points = (0...56).map { index in
+                let t = Double(index) / 56
+                // Leave room for the brightest part of the meteor at the end of the sample.
+                return CGPoint(x: 22 + (width - 59) * t, y: height / 2 - 8 * sin(2 * .pi * t))
+            }
+            context.withCGContext { cg in
+                cg.scaleBy(x: zoom, y: zoom)
+                TrailRenderer.draw(points, style: style, phase: 0.32, in: cg)
+            }
         }
     }
 }

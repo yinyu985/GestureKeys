@@ -209,6 +209,10 @@ final class RecorderButton: NSButton {
 
 extension TrailStyle {
     var nsColor: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: 1) }
+    var nsEffectColor: NSColor {
+        let tint = self.tint
+        return NSColor(srgbRed: tint.red, green: tint.green, blue: tint.blue, alpha: 1)
+    }
 }
 
 private struct StrokePreview {
@@ -366,38 +370,94 @@ final class StrokeCanvasView: NSView {
     }
 }
 
+@MainActor
 final class TrailOverlay {
     private var panel: NSPanel?
     private var drawing: TrailView?
-    func update(_ points: [StrokePoint]?, style: TrailStyle = TrailStyle()) {
-        guard let points, !points.isEmpty else { panel?.orderOut(nil); return }
+    private var fadeTimer: Timer?
+    private var startedAt: TimeInterval?
+
+    func update(_ points: [StrokePoint], style: TrailStyle) {
+        guard points.count > 1 else { return }
         guard let main = NSScreen.screens.first else { return }
         let frame = NSScreen.screens.reduce(main.frame) { $0.union($1.frame) }
         if panel == nil {
             let p = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.backgroundColor = .clear; p.isOpaque = false; p.hasShadow = false
+            p.sharingType = .none
             p.ignoresMouseEvents = true; p.level = .statusBar
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
             let view = TrailView(frame: NSRect(origin: .zero, size: frame.size)); p.contentView = view
             panel = p; drawing = view
         }
-        panel?.setFrame(frame, display: false)
-        drawing?.style = style
-        drawing?.points = points.map { CGPoint(x: $0.x - frame.minX, y: main.frame.maxY - $0.y - frame.minY) }
-        drawing?.needsDisplay = true; panel?.orderFrontRegardless()
+        if panel?.frame != frame { panel?.setFrame(frame, display: false) }
+        let now = ProcessInfo.processInfo.systemUptime
+        if fadeTimer != nil || startedAt == nil { startedAt = now }
+        fadeTimer?.invalidate()
+        fadeTimer = nil
+        let phase = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : now - (startedAt ?? now)
+        let local = points.map { CGPoint(x: $0.x - frame.minX, y: $0.y - main.frame.maxY + frame.maxY) }
+        drawing?.update(local, style: style, phase: phase)
+        if panel?.isVisible == false { panel?.orderFrontRegardless() }
+    }
+
+    func finish() {
+        guard let drawing, panel?.isVisible == true, fadeTimer == nil else { return }
+        guard drawing.style.effect != .line, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { hide(); return }
+        let began = ProcessInfo.processInfo.systemUptime
+        let duration = 0.22
+        let timer = Timer(timeInterval: 1 / 30.0, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, self.fadeTimer === timer else { return }
+                let elapsed = ProcessInfo.processInfo.systemUptime - began
+                if elapsed >= duration { self.hide(); return }
+                self.drawing?.fade(opacity: 1 - elapsed / duration, elapsed: elapsed)
+            }
+        }
+        fadeTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    func hide() {
+        fadeTimer?.invalidate()
+        fadeTimer = nil
+        startedAt = nil
+        if let drawing { drawing.update([], style: drawing.style, phase: 0) }
+        if panel?.isVisible == true { panel?.orderOut(nil) }
     }
 }
 
 final class TrailView: NSView {
-    var points: [CGPoint] = []
-    var style = TrailStyle()
+    private var points: [CGPoint] = []
+    private(set) var style = TrailStyle()
+    private var phase = 0.0
+    private var fadeElapsed = 0.0
+    private var opacity = 1.0
+    private var inkBounds = CGRect.null
+
+    override var isFlipped: Bool { true }
+
+    func update(_ points: [CGPoint], style: TrailStyle, phase: Double) {
+        let oldBounds = inkBounds
+        self.points = points
+        self.style = style
+        self.phase = phase
+        fadeElapsed = 0
+        opacity = 1
+        inkBounds = TrailRenderer.bounds(points, style: style)
+        let dirty = oldBounds.union(inkBounds)
+        if !dirty.isNull { setNeedsDisplay(dirty) }
+    }
+
+    func fade(opacity: Double, elapsed: Double) {
+        self.opacity = opacity
+        fadeElapsed = elapsed
+        if !inkBounds.isNull { setNeedsDisplay(inkBounds) }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        guard let first = points.first else { return }
-        let path = NSBezierPath(); path.move(to: first)
-        for point in points.dropFirst() { path.line(to: point) }
-        path.lineCapStyle = .round; path.lineJoinStyle = .round
-        path.lineWidth = style.width; NSColor.black.withAlphaComponent(0.33).setStroke(); path.stroke()
-        path.lineWidth = style.width; style.nsColor.setStroke(); path.stroke()
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        TrailRenderer.draw(points, style: style, phase: phase + fadeElapsed, opacity: opacity, in: context)
     }
 }
 
