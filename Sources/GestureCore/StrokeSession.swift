@@ -8,9 +8,10 @@ public struct StrokeSession {
     public init(start: StrokePoint, time: TimeInterval) { points = [start]; startedAt = time }
     public private(set) var isDrag = false
     public mutating func append(_ p: StrokePoint, time: TimeInterval) -> Bool {
-        guard time - startedAt <= 10, points.count < 2048, p.x.isFinite, p.y.isFinite else { return false }
+        guard p.x.isFinite, p.y.isFinite else { return false }
         // Latch once the pointer leaves the click radius, not after enough jitter in place.
         if !isDrag, points[0].distance(to: p) >= 10 { isDrag = true }
+        guard time - startedAt <= 10, points.count < 2048 else { return false }
         let step = points.last!.distance(to: p)
         if step >= 0.75 { distance += step; points.append(p) }
         return true

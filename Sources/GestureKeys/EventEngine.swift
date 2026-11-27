@@ -171,7 +171,7 @@ final class EventEngine: @unchecked Sendable {
             status(true)
             CFRunLoopRun()
         }
-        // Submit any buffered down before disabling the tap and allowing new physical ups through.
+        // Restore pending clicks before disabling the tap and allowing physical ups through.
         resolvePendingClick(replayOnly: true)
         releaseStroke("tap_flush")
         CGEvent.tapEnable(tap: port, enable: false)
@@ -235,18 +235,19 @@ final class EventEngine: @unchecked Sendable {
         }
         return facts
     }
-    /// Hand a complete prefix back to the same context. A new target must not see a drag or an up without a down.
+    /// Replay to the original context unless a right-button gesture has already started.
     private func releaseStroke(_ reason: String, proxy: CGEventTapProxy? = nil, finished: Bool = false,
                                log: String = "mouse.cancelled", details: [String: String] = [:]) {
-        guard stroke != nil else { return }
+        guard let stroke else { return }
         finishStrokeTrail()
-        let sameContext = snapshot().target == strokeTarget
+        let capturedGesture = strokeButton == Int(CGMouseButton.right.rawValue) && stroke.isDrag && !strokeBindings.templates.isEmpty
+        let shouldReplay = !capturedGesture && snapshot().target == strokeTarget
         var facts = details
         facts["trace"] = strokeTrace
         facts["reason"] = reason
-        facts["replayed"] = String(sameContext)
+        facts["replayed"] = String(shouldReplay)
         diagnostics.record(log, facts)
-        if sameContext { replay(buffered, proxy: proxy) }
+        if shouldReplay { replay(buffered, proxy: proxy) }
         else if !finished { discardUntilUp.insert(strokeButton) }
         resetStroke()
     }
@@ -401,7 +402,7 @@ final class EventEngine: @unchecked Sendable {
             resolvePendingClick(proxy: proxy, replayOnly: stopping)
         }
         if stroke != nil && (stopping || suspended || target != strokeTarget) {
-            // On stop, post the intercepted down through the proxy *before* passing its physical up.
+            // Restore a pending click through the proxy before passing its physical up.
             releaseStroke(stopping ? "tap_flush" : suspended ? "editor_focused" : "context_changed", proxy: proxy)
         }
         if isDown { discardUntilUp.remove(button) }
@@ -435,7 +436,7 @@ final class EventEngine: @unchecked Sendable {
         if (isDrag || isUp), button == strokeButton, stroke != nil {
             if isUp { finishStrokeTrail() }
             if let copy = event.copy() { buffered.append(copy) }
-            guard buffered.count <= 4096, stroke!.append(point, time: time) else {
+            guard stroke!.append(point, time: time), buffered.count <= 4096 else {
                 resolvePendingClick(proxy: proxy)
                 releaseStroke("stroke_limit", proxy: proxy, finished: isUp)
                 return nil
@@ -530,8 +531,34 @@ final class EventEngine: @unchecked Sendable {
         replayed = 0
         let miss = engine([diagonal])
         _ = mouse(miss, .rightMouseDown, 100, 50); _ = mouse(miss, .rightMouseDragged, 50, 50)
-        _ = mouse(miss, .rightMouseUp, 0, 50)
-        try require(miss.verificationActions!.isEmpty && replayed == 3, "未匹配完整回放")
+        try require(mouse(miss, .rightMouseUp, 0, 50) && miss.verificationActions!.isEmpty && replayed == 0, "未匹配的右键轨迹整笔吞掉")
+
+        let returned = engine([diagonal])
+        _ = mouse(returned, .rightMouseDown, 0, 50)
+        _ = mouse(returned, .rightMouseDragged, 20, 50)
+        _ = mouse(returned, .rightMouseDragged, 0, 50)
+        try require(mouse(returned, .rightMouseUp, 0, 50) && returned.verificationActions!.isEmpty && replayed == 0, "右键拖回起点仍按手势处理")
+
+        let plain = engine([diagonal])
+        try require(mouse(plain, .rightMouseDown, 5, 5) && mouse(plain, .rightMouseUp, 5, 5)
+                    && plain.verificationActions!.isEmpty && replayed == 2, "普通右键交还按下和松开")
+        _ = mouse(plain, .rightMouseDown, 5, 5)
+        _ = mouse(plain, .rightMouseDragged, 8, 7)
+        _ = mouse(plain, .rightMouseUp, 6, 6)
+        try require(plain.verificationActions!.isEmpty && replayed == 5, "容差内右键抖动仍按点击回放")
+
+        let limited = engine([diagonal]); replayed = 0
+        _ = mouse(limited, .rightMouseDown, 0, 50, time: 1)
+        _ = mouse(limited, .rightMouseDragged, 40, 50, time: 12)
+        try require(limited.stroke == nil && mouse(limited, .rightMouseUp, 40, 50, time: 12.1)
+                    && limited.verificationActions!.isEmpty && replayed == 0, "超时右键拖动及随后松开都吞掉")
+
+        let interrupted = engine([diagonal])
+        _ = mouse(interrupted, .rightMouseDown, 0, 50)
+        _ = mouse(interrupted, .rightMouseDragged, 40, 50)
+        try require(!mouse(interrupted, .leftMouseDown, 40, 50, button: 0)
+                    && mouse(interrupted, .rightMouseUp, 40, 50)
+                    && interrupted.verificationActions!.isEmpty && replayed == 0, "另一按键取消右键轨迹时不回放")
 
         let click = Rule(kind: .click, action: .missionControl)
         let mixed = engine([diagonal, click])
@@ -541,6 +568,12 @@ final class EventEngine: @unchecked Sendable {
         _ = mouse(shifted, .rightMouseDown, 0, 0, flags: 0x20000)
         _ = mouse(shifted, .rightMouseUp, 0, 0, flags: 0x20000)
         try require(shifted.verificationActions == [click.id], "鼠标规则不依赖 Shift")
+
+        let clickOnly = engine([click]); replayed = 0
+        _ = mouse(clickOnly, .rightMouseDown, 0, 0)
+        _ = mouse(clickOnly, .rightMouseDragged, 12, 0)
+        try require(!mouse(clickOnly, .rightMouseUp, 12, 0) && replayed == 2
+                    && clickOnly.verificationActions!.isEmpty, "没有右键手势规则时拖动照常传递")
 
         let switched = engine([diagonal]); replayed = 0
         _ = mouse(switched, .rightMouseDown, 0, 100)
